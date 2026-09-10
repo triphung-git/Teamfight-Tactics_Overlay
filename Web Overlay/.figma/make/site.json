@@ -1,0 +1,10 @@
+{
+  "description": "Offers a compact, dark-themed control panel for precise cropping, positioning, rotation, and zooming of video sources with real-time preview and rendering.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

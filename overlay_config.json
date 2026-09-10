@@ -1,0 +1,29 @@
+{
+  "tournament_title": "HOSC 2026 | TEAMFIGHT TACTICS",
+  "stage_title": "LAST CHANCE QUALIFIER",
+  "game_title": "",
+  "server_port": 8080,
+  "background_image": "assets/background.png",
+  "font_family": "League Spartan",
+  "player_avatars": {
+    "bí ẹo": "assets/avatars/bi_eo.png"
+  },
+  "overlay_transform": {
+    "posX": 0,
+    "posY": 0,
+    "rotX": 0,
+    "rotY": 0,
+    "rotZ": 0,
+    "zoomX": 100,
+    "zoomY": 100,
+    "cropTop": 0,
+    "cropBottom": 0,
+    "cropLeft": 0,
+    "cropRight": 0
+  },
+  "custom_augments": [
+    "Cluttered Mind.png",
+    "Invested-III.png",
+    "U.R.F.png"
+  ]
+}

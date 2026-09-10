@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TFT Post-Match Overlay</title>
+  <!-- Font League Spartan theo yêu cầu chính xác của người dùng -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=League+Spartan:wght@500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="overlay.css">
+  <script>
+    // Tự động co giãn theo tỷ lệ 16:9 vừa khít mọi kích thước màn hình và độ phân giải Windows DPI
+    function autoScaleOverlay() {
+      const scaler = document.getElementById('overlay-scaler');
+      if (!scaler) return;
+      const winW = window.innerWidth || document.documentElement.clientWidth;
+      const winH = window.innerHeight || document.documentElement.clientHeight;
+      if (!winW || !winH) return;
+      
+      const scale = Math.min(winW / 1920, winH / 1080);
+      scaler.style.transform = 'scale(' + scale + ')';
+    }
+
+    window.addEventListener('resize', autoScaleOverlay);
+    window.addEventListener('orientationchange', autoScaleOverlay);
+    document.addEventListener('DOMContentLoaded', autoScaleOverlay);
+    window.addEventListener('load', autoScaleOverlay);
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+      setTimeout(autoScaleOverlay, 10);
+    }
+  </script>
+</head>
+<body>
+  <div id="overlay-scaler" class="overlay-scaler">
+    <div class="overlay-container" style="{{ TRANSFORM_STYLE }}">
+      
+      <!-- 1. TOP HEADER BAR -->
+      <header class="top-header">
+        <!-- Sub-bar: Logos & Game Name -->
+        <div class="sub-bar">
+          <div class="logos-group">
+            <!-- Logo 0: NEC (Ngoài cùng bên trái) -->
+            <div class="brand-logo logo-nec">
+              <img src="../assets/Logo NEC.png" alt="NEC">
+            </div>
+
+            <!-- Logo 1: OEG -->
+            <div class="brand-logo logo-oeg">
+              <img src="../assets/OEG.png" alt="OEG">
+            </div>
+            
+            <!-- Logo 2: VNGGames -->
+            <div class="brand-logo logo-vng">
+              <img src="../assets/VNGGames.png" alt="VNGGames">
+            </div>
+
+            <!-- Logo 3: Đại Chiến Chảo Vàng (TFT Tournament Spatula & Cap) -->
+            <div class="brand-logo logo-daichien">
+              <img src="../assets/dai_chien_chao_vang.png" alt="Đại Chiến Chảo Vàng">
+            </div>
+          </div>
+        </div>
+
+        <!-- Main Title Bar: Brushed Gold -->
+        <div class="main-title-bar">
+          <div class="tournament-title">{{ TOURNAMENT_TITLE }}</div>
+          <div class="stage-title">{{ STAGE_TITLE }}</div>
+        </div>
+      </header>
+
+      <!-- 2. MAIN BATTLE ARENA -->
+      <main class="main-content">
+        
+        <!-- LEFT PANEL: TOP 1 CHAMPION CARD -->
+        <section class="left-panel">
+          
+          <!-- Header Bar: 1ST + NAME + 8 ĐIỂM -->
+          <div class="winner-header-bar">
+            <div class="placement-badge">1ST</div>
+            <div class="player-name-container">
+              <span class="player-name">{{ TOP1_NAME }}</span>
+            </div>
+            <div class="points-badge">
+              <span class="pts-num">8</span>
+              <span class="pts-text">ĐIỂM</span>
+            </div>
+          </div>
+
+          <!-- Middle Card: Avatar + Augments + Board Value -->
+          <div class="winner-card-body">
+            <!-- Avatar Frame with rich border -->
+            <div class="avatar-wrapper">
+              <div class="avatar-frame">
+                <img src="{{ TOP1_AVATAR_URL }}" alt="{{ TOP1_NAME }}" class="avatar-img">
+              </div>
+            </div>
+
+            <!-- Augments & Board Value Column -->
+            <div class="stats-column">
+              <!-- 3 Augments Slots (2 top, 1 bottom) -->
+              <div class="augments-grid">
+                {{ TOP1_AUGMENTS_HTML }}
+              </div>
+
+              <!-- Horizontal Divider -->
+              <div class="stats-divider"></div>
+
+              <!-- Total Board Unit Value (Gold) -->
+              <div class="board-value-box">
+                <div class="coin-icon">
+                  <img src="../TFT_DDragon/img/region-portal/Coins_Icon.png" alt="Coins" class="coins-img">
+                </div>
+                <div class="board-value-number">{{ TOP1_BOARD_VALUE }}</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bottom Champions Board Strip -->
+          <div class="winner-units-strip">
+            {{ TOP1_UNITS_HTML }}
+          </div>
+
+        </section>
+
+        <!-- RIGHT PANEL: LOBBY STANDINGS (TOP 2 -> TOP 8) -->
+        <section class="right-panel">
+          {{ LOBBY_STANDINGS_HTML }}
+        </section>
+
+      </main>
+
+    </div>
+  </div>
+</body>
+</html>

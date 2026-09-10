@@ -1,0 +1,381 @@
+"""
+backend/overlay_generator.py
+----------------------------
+Tạo file HTML Overlay 1920x1080 từ dữ liệu Clean Match JSON của TFT.
+Dựa trên phong cách thiết kế giải đấu Esports HOSC 2026.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import shutil
+import sys
+from pathlib import Path
+from typing import Any, Optional
+
+# Đảm bảo terminal Windows in UTF-8
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("overlay_generator")
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+TEMPLATES_DIR = BASE_DIR / "templates"
+ASSETS_DIR = BASE_DIR / "assets"
+OUTPUT_DIR = BASE_DIR / "output"
+DDRAGON_IMG_DIR = BASE_DIR / "TFT_DDragon" / "img"
+
+DEFAULT_CONFIG_FILE = BASE_DIR / "overlay_config.json"
+DEFAULT_TEMPLATE_FILE = TEMPLATES_DIR / "overlay.html"
+DEFAULT_CSS_FILE = TEMPLATES_DIR / "overlay.css"
+
+
+def load_overlay_config(config_path: Path) -> dict:
+    """Nạp file cấu hình overlay tùy chỉnh."""
+    default_config = {
+        "tournament_title": "HOSC 2026",
+        "stage_title": "LAST CHANCE QUALIFIER",
+        "game_title": "TEAMFIGHT TACTICS",
+        "server_port": 8080,
+        "background_image": "../assets/background.png",
+        "player_avatars": {},
+    }
+    if config_path.exists():
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+                default_config.update(loaded)
+        except Exception as exc:
+            logger.warning("Không thể đọc file config %s: %s", config_path, exc)
+    return default_config
+
+
+_IMAGE_SETS: dict[str, set[str]] = {}
+
+
+def get_image_set(folder_name: str) -> set[str]:
+    """Cache danh sách tên ảnh để tra cứu O(1) trong RAM, tránh I/O quét đĩa."""
+    if folder_name not in _IMAGE_SETS:
+        folder = DDRAGON_IMG_DIR / folder_name
+        if folder.exists():
+            try:
+                _IMAGE_SETS[folder_name] = {f.name for f in folder.iterdir() if f.is_file()}
+            except Exception:
+                _IMAGE_SETS[folder_name] = set()
+        else:
+            _IMAGE_SETS[folder_name] = set()
+    return _IMAGE_SETS[folder_name]
+
+
+def find_avatar_url(player_name: str, display_name: str, companion_img: str, config: dict) -> str:
+    """
+    Xác định URL ảnh chân dung đại diện:
+    1. Tra cứu trong overlay_config.json ("player_avatars")
+    2. Tra cứu trong thư mục assets/avatars/{name}.png
+    3. Fallback: DDragon linh thú companion_image (tra cứu O(1) RAM)
+    4. Fallback cuối: linh thú mặc định
+    """
+    avatars_map = config.get("player_avatars", {})
+
+    # Kiểm tra map cấu hình
+    for key in (player_name, display_name, player_name.split("#")[0]):
+        if key in avatars_map and avatars_map[key]:
+            avatar_path = BASE_DIR / avatars_map[key]
+            if avatar_path.exists():
+                return f"../{avatars_map[key].replace('\\', '/')}"
+
+    # Kiểm tra thư mục assets/avatars/
+    avatars_folder = ASSETS_DIR / "avatars"
+    clean_name = "".join(c if c.isalnum() else "_" for c in display_name).lower()
+    for ext in (".png", ".jpg", ".jpeg", ".webp"):
+        candidate = avatars_folder / f"{display_name}{ext}"
+        if candidate.exists():
+            return f"../assets/avatars/{candidate.name}"
+        candidate_clean = avatars_folder / f"{clean_name}{ext}"
+        if candidate_clean.exists():
+            return f"../assets/avatars/{candidate_clean.name}"
+
+    # Fallback: Linh thú DDragon (tra cứu O(1) trong RAM)
+    tacticians_set = get_image_set("tactician")
+    if companion_img and companion_img in tacticians_set:
+        return f"../TFT_DDragon/img/tactician/{companion_img}"
+
+    # Fallback nếu không có gì: Tìm một linh thú có sẵn
+    default_tacticians = [
+        "Tooltip_ChibiKatarina_Base_Classic_Tier1.png",
+        "Tooltip_PenguFeatherknight_Base_Tier1.png",
+    ]
+    for def_tact in default_tacticians:
+        if def_tact in tacticians_set:
+            return f"../TFT_DDragon/img/tactician/{def_tact}"
+
+    # Fallback cuối
+    return "../assets/background.png"
+
+
+def resolve_custom_augment(item: Any, config: dict) -> dict:
+    """Xác định tên và ảnh của lõi nâng cấp từ cấu hình (hỗ trợ file, tên Việt/Anh, mã ID, không phân biệt hoa thường/đuôi .png)."""
+    import re
+    if isinstance(item, dict):
+        return {
+            "name": item.get("name", "Augment"),
+            "image": item.get("image", ""),
+        }
+    if isinstance(item, str):
+        val = item.strip()
+        if not val:
+            return {"name": "Augment", "image": ""}
+
+        aug_set = get_image_set("augment")
+        aug_lower = {f.lower(): f for f in aug_set}
+
+        # 1. Khớp trực tiếp tên file ảnh có trong thư mục (chính xác hoặc không phân biệt hoa thường)
+        if val in aug_set:
+            return {"name": Path(val).stem, "image": val}
+        if val.lower() in aug_lower:
+            return {"name": Path(val).stem, "image": aug_lower[val.lower()]}
+
+        # 2. Xóa đuôi file nếu người dùng gõ nhầm đuôi .png/.jpg vào tên lõi (vd: "Cluttered Mind.png" -> "Cluttered Mind")
+        query = re.sub(r'\.(png|jpg)$', '', val, flags=re.IGNORECASE).strip()
+        query_norm = re.sub(r'[^a-zA-Z0-9]', '', query).lower()
+
+        from backend.data_parser import get_ddragon_loader
+        lang = config.get("language", "vi_VN")
+        loaders = [get_ddragon_loader(lang)]
+        if lang != "en_US":
+            try:
+                loaders.append(get_ddragon_loader("en_US"))
+            except Exception:
+                pass
+
+        # 3. Tìm theo ID hoặc Tên trong từ điển Data Dragon (tiếng Việt và tiếng Anh)
+        for loader in loaders:
+            # Khớp chính xác ID (vd: "DA_URF", "TFT7_Augment_ClutteredMind")
+            for aid, img in loader.augment_images.items():
+                aid_norm = re.sub(r'[^a-zA-Z0-9]', '', aid).lower()
+                if query.lower() == aid.lower() or (query_norm and query_norm == aid_norm):
+                    return {"name": loader.augments.get(aid, query), "image": img}
+
+            # Khớp chính xác Tên (vd: "Bừa Bộn", "Cluttered Mind", "U.R.F.")
+            for aid, aname in loader.augments.items():
+                aname_norm = re.sub(r'[^a-zA-Z0-9]', '', aname).lower()
+                if query.lower() == aname.lower() or (query_norm and query_norm == aname_norm):
+                    return {"name": aname, "image": loader.augment_images.get(aid, "")}
+
+            # Khớp một phần Tên
+            for aid, aname in loader.augments.items():
+                aname_norm = re.sub(r'[^a-zA-Z0-9]', '', aname).lower()
+                if query_norm and query_norm in aname_norm:
+                    return {"name": aname, "image": loader.augment_images.get(aid, "")}
+
+            # Khớp một phần ID
+            for aid, img in loader.augment_images.items():
+                aid_norm = re.sub(r'[^a-zA-Z0-9]', '', aid).lower()
+                if query_norm and query_norm in aid_norm:
+                    return {"name": loader.augments.get(aid, query), "image": img}
+
+        # 4. Tìm kiếm mờ theo tên file ảnh trong thư mục augment
+        if query_norm:
+            for f in aug_set:
+                f_norm = re.sub(r'[^a-zA-Z0-9]', '', f).lower()
+                if query_norm in f_norm:
+                    return {"name": query, "image": f}
+
+        return {"name": val, "image": ""}
+    return {"name": "Augment", "image": ""}
+
+
+def build_augments_html(augments_detailed: list[dict], config: Optional[dict] = None) -> str:
+    """Tạo HTML cho 3 lõi nâng cấp (hỗ trợ custom_augments từ overlay_config.json)."""
+    cfg = config or {}
+    custom = cfg.get("custom_augments", [])
+
+    items_to_render = []
+    if custom and isinstance(custom, list):
+        for item in custom[:3]:
+            items_to_render.append(resolve_custom_augment(item, cfg))
+    elif augments_detailed:
+        items_to_render = list(augments_detailed[:3])
+
+    slots = []
+    for aug in items_to_render:
+        img_name = aug.get("image") or ""
+        name = aug.get("name") or "Augment"
+        img_path = f"../TFT_DDragon/img/augment/{img_name}" if img_name else ""
+        if img_path:
+            slot_html = f'<div class="augment-slot" title="{name}"><img src="{img_path}" alt="{name}"></div>'
+        else:
+            slot_html = f'<div class="augment-slot empty-slot" title="{name}"></div>'
+        slots.append(slot_html)
+
+    # Đảm bảo luôn có đủ 3 ô lõi
+    while len(slots) < 3:
+        slots.append('<div class="augment-slot empty-slot" title="Chưa có lõi"></div>')
+
+    return "\n              ".join(slots)
+
+
+def build_units_html(units: list[dict]) -> str:
+    """Tạo HTML cho dải tướng trên bàn cờ của Top 1 với ngôi sao trên đỉnh."""
+    unit_cards = []
+    for u in units:
+        tier = max(1, min(4, u.get("tier", 1)))
+        cost = u.get("cost", 1)
+        name = u.get("name", "Champion")
+        char_img = u.get("image", "")
+        img_url = f"../TFT_DDragon/img/champion/{char_img}" if char_img else ""
+
+        # Sinh danh sách các ngôi sao sử dụng ảnh assets/stars.png
+        stars_html = "".join(
+            ['<img src="../assets/stars.png" class="star-icon" alt="★">' for _ in range(tier)]
+        )
+
+        items_html = []
+        raw_items = u.get("items_detailed", [])
+        for item in raw_items[:3]:
+            iimg = item.get("image", "")
+            iname = item.get("name", "Trang bị")
+            if iimg:
+                items_html.append(
+                    f'<div class="item-slot" title="{iname}"><img src="../TFT_DDragon/img/item/{iimg}" alt="{iname}"></div>'
+                )
+        items_row_content = "".join(items_html)
+
+        card = f"""
+        <div class="unit-card">
+          <div class="star-rating-bar">
+            {stars_html}
+          </div>
+          <div class="champion-frame cost-{cost}">
+            <img src="{img_url}" alt="{name}">
+          </div>
+          <div class="items-row">
+            {items_row_content}
+          </div>
+        </div>
+        """
+        unit_cards.append(card.strip())
+
+    return "\n        ".join(unit_cards)
+
+
+def build_lobby_standings_html(lobby: list[dict]) -> str:
+    """Tạo HTML cho bảng xếp hạng Top 2 -> Top 8."""
+    rows = []
+    rank_suffixes = {
+        2: "2ND",
+        3: "3RD",
+        4: "4TH",
+        5: "5TH",
+        6: "6TH",
+        7: "7TH",
+        8: "8TH",
+    }
+
+    standing_players = [p for p in lobby if p.get("placement", 0) >= 2][:7]
+
+    for p in standing_players:
+        place = p.get("placement", 2)
+        rank_text = rank_suffixes.get(place, f"{place}TH")
+        display_name = p.get("game_name") or p.get("display_name") or p.get("player_name", "").split("#")[0]
+        points = p.get("esports_points", max(1, 9 - place))
+
+        row_html = f"""
+        <div class="standing-row">
+          <div class="standing-rank">{rank_text}</div>
+          <div class="standing-name-box">
+            <span class="standing-name">{display_name}</span>
+          </div>
+          <div class="standing-pts">
+            <span class="pts-num">{points}</span>
+            <span class="pts-text">ĐIỂM</span>
+          </div>
+        </div>
+        """
+        rows.append(row_html.strip())
+
+    return "\n        ".join(rows)
+
+
+def generate_overlay_html(
+    match_data: dict,
+    config: dict,
+    output_html_path: Path,
+) -> Path:
+    """Biên dịch template HTML với dữ liệu trận đấu và ghi ra file."""
+    lobby = match_data.get("lobby", [])
+    if not lobby:
+        raise ValueError("Dữ liệu trận đấu không có thông tin lobby!")
+
+    # 1. Tìm người chơi đạt Top 1
+    top1 = next((p for p in lobby if p.get("placement") == 1), lobby[0])
+
+    top1_player_name = top1.get("player_name", "Unknown")
+    top1_display_name = top1.get("game_name") or top1.get("display_name") or top1_player_name.split("#")[0]
+    top1_board_value = top1.get("board_value", 0)
+    top1_companion_img = top1.get("companion_image", "")
+
+    # 2. Chuẩn bị các thành phần
+    avatar_url = find_avatar_url(top1_player_name, top1_display_name, top1_companion_img, config)
+    augments_html = build_augments_html(top1.get("augments_detailed", []), config=config)
+    units_html = build_units_html(top1.get("units", []))
+    standings_html = build_lobby_standings_html(lobby)
+
+    # 3. Đọc template
+    with open(DEFAULT_TEMPLATE_FILE, "r", encoding="utf-8") as f:
+        html_template = f.read()
+
+    # 4. Thay thế biến
+    rendered = html_template.replace("{{ GAME_TITLE }}", config.get("game_title", "TEAMFIGHT TACTICS"))
+    rendered = rendered.replace("{{ TOURNAMENT_TITLE }}", config.get("tournament_title", "HOSC 2026 | TEAMFIGHT TACTICS"))
+    rendered = rendered.replace("{{ STAGE_TITLE }}", config.get("stage_title", "LAST CHANCE QUALIFIER"))
+    rendered = rendered.replace("{{ TOP1_NAME }}", top1_display_name)
+    rendered = rendered.replace("{{ TOP1_AVATAR_URL }}", avatar_url)
+    rendered = rendered.replace("{{ TOP1_BOARD_VALUE }}", str(top1_board_value))
+    rendered = rendered.replace("{{ TOP1_AUGMENTS_HTML }}", augments_html)
+    rendered = rendered.replace("{{ TOP1_UNITS_HTML }}", units_html)
+    rendered = rendered.replace("{{ LOBBY_STANDINGS_HTML }}", standings_html)
+
+    # Thay thế Transform & Crop Style
+    tf = config.get("overlay_transform", {})
+    pos_x = tf.get("posX", 0)
+    pos_y = tf.get("posY", 0)
+    rot_x = tf.get("rotX", 0)
+    rot_y = tf.get("rotY", 0)
+    rot_z = tf.get("rotZ", 0)
+    zoom_x = tf.get("zoomX", 100) / 100.0
+    zoom_y = tf.get("zoomY", 100) / 100.0
+    crop_t = tf.get("cropTop", 0)
+    crop_b = tf.get("cropBottom", 0)
+    crop_l = tf.get("cropLeft", 0)
+    crop_r = tf.get("cropRight", 0)
+
+    tf_style = f"transform: translate({pos_x}px, {pos_y}px) rotateX({rot_x}deg) rotateY({rot_y}deg) rotateZ({rot_z}deg) scale({zoom_x}, {zoom_y}); transform-origin: center center;"
+    if crop_t or crop_b or crop_l or crop_r:
+        tf_style += f" clip-path: inset({crop_t}% {crop_r}% {crop_b}% {crop_l}%);"
+
+    rendered = rendered.replace("{{ TRANSFORM_STYLE }}", tf_style)
+
+    # 5. Ghi file HTML đầu ra
+    output_html_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_html_path, "w", encoding="utf-8") as f:
+        f.write(rendered)
+
+    # 6. Đồng bộ file CSS sang output/
+    output_css_path = output_html_path.parent / "overlay.css"
+    shutil.copy(DEFAULT_CSS_FILE, output_css_path)
+
+    logger.info("Overlay created")
+    return output_html_path

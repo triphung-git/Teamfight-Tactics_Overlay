@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TFT Post-Match Overlay</title>
+  <!-- Font League Spartan theo yêu cầu chính xác của người dùng -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=League+Spartan:wght@500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="overlay.css">
+  <script>
+    // Tự động co giãn theo tỷ lệ 16:9 vừa khít mọi kích thước màn hình và độ phân giải Windows DPI
+    function autoScaleOverlay() {
+      const scaler = document.getElementById('overlay-scaler');
+      if (!scaler) return;
+      const winW = window.innerWidth || document.documentElement.clientWidth;
+      const winH = window.innerHeight || document.documentElement.clientHeight;
+      if (!winW || !winH) return;
+      
+      const scale = Math.min(winW / 1920, winH / 1080);
+      scaler.style.transform = 'scale(' + scale + ')';
+    }
+
+    window.addEventListener('resize', autoScaleOverlay);
+    window.addEventListener('orientationchange', autoScaleOverlay);
+    document.addEventListener('DOMContentLoaded', autoScaleOverlay);
+    window.addEventListener('load', autoScaleOverlay);
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+      setTimeout(autoScaleOverlay, 10);
+    }
+  </script>
+</head>
+<body>
+  <div id="overlay-scaler" class="overlay-scaler">
+    <div class="overlay-container" style="transform: translate(0px, 0px) rotateX(0deg) rotateY(0deg) rotateZ(0deg) scale(1.0, 1.0); transform-origin: center center;">
+      
+      <!-- 1. TOP HEADER BAR -->
+      <header class="top-header">
+        <!-- Sub-bar: Logos & Game Name -->
+        <div class="sub-bar">
+          <div class="logos-group">
+            <!-- Logo 0: NEC (Ngoài cùng bên trái) -->
+            <div class="brand-logo logo-nec">
+              <img src="../assets/Logo NEC.png" alt="NEC">
+            </div>
+
+            <!-- Logo 1: OEG -->
+            <div class="brand-logo logo-oeg">
+              <img src="../assets/OEG.png" alt="OEG">
+            </div>
+            
+            <!-- Logo 2: VNGGames -->
+            <div class="brand-logo logo-vng">
+              <img src="../assets/VNGGames.png" alt="VNGGames">
+            </div>
+
+            <!-- Logo 3: Đại Chiến Chảo Vàng (TFT Tournament Spatula & Cap) -->
+            <div class="brand-logo logo-daichien">
+              <img src="../assets/dai_chien_chao_vang.png" alt="Đại Chiến Chảo Vàng">
+            </div>
+          </div>
+        </div>
+
+        <!-- Main Title Bar: Brushed Gold -->
+        <div class="main-title-bar">
+          <div class="tournament-title">HOSC 2026 | TEAMFIGHT TACTICS</div>
+          <div class="stage-title">LAST CHANCE QUALIFIER</div>
+        </div>
+      </header>
+
+      <!-- 2. MAIN BATTLE ARENA -->
+      <main class="main-content">
+        
+        <!-- LEFT PANEL: TOP 1 CHAMPION CARD -->
+        <section class="left-panel">
+          
+          <!-- Header Bar: 1ST + NAME + 8 ĐIỂM -->
+          <div class="winner-header-bar">
+            <div class="placement-badge">1ST</div>
+            <div class="player-name-container">
+              <span class="player-name">Tun</span>
+            </div>
+            <div class="points-badge">
+              <span class="pts-num">8</span>
+              <span class="pts-text">ĐIỂM</span>
+            </div>
+          </div>
+
+          <!-- Middle Card: Avatar + Augments + Board Value -->
+          <div class="winner-card-body">
+            <!-- Avatar Frame with rich border -->
+            <div class="avatar-wrapper">
+              <div class="avatar-frame">
+                <img src="../TFT_DDragon/img/tactician/Tooltip_NebulaFox_Base_Classic_Tier1.LL_NebulaFox_Base.png" alt="Tun" class="avatar-img">
+              </div>
+            </div>
+
+            <!-- Augments & Board Value Column -->
+            <div class="stats-column">
+              <!-- 3 Augments Slots (2 top, 1 bottom) -->
+              <div class="augments-grid">
+                <div class="augment-slot" title="Bừa Bộn"><img src="../TFT_DDragon/img/augment/Dizzy-II.png" alt="Bừa Bộn"></div>
+              <div class="augment-slot" title="Invested-III"><img src="../TFT_DDragon/img/augment/Invested-III.png" alt="Invested-III"></div>
+              <div class="augment-slot" title="U.R.F."><img src="../TFT_DDragon/img/augment/UltraRapidFire_II.png" alt="U.R.F."></div>
+              </div>
+
+              <!-- Horizontal Divider -->
+              <div class="stats-divider"></div>
+
+              <!-- Total Board Unit Value (Gold) -->
+              <div class="board-value-box">
+                <div class="coin-icon">
+                  <img src="../TFT_DDragon/img/region-portal/Coins_Icon.png" alt="Coins" class="coins-img">
+                </div>
+                <div class="board-value-number">121</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bottom Champions Board Strip -->
+          <div class="winner-units-strip">
+            <div class="unit-card">
+          <div class="star-rating-bar">
+            <img src="../assets/stars.png" class="star-icon" alt="★"><img src="../assets/stars.png" class="star-icon" alt="★"><img src="../assets/stars.png" class="star-icon" alt="★"><img src="../assets/stars.png" class="star-icon" alt="★">
+          </div>
+          <div class="champion-frame cost-2">
+            <img src="../TFT_DDragon/img/champion/TFT18_Warwick_splash_centered_35.TFT_Set18.png" alt="Warwick">
+          </div>
+          <div class="items-row">
+            <div class="item-slot" title="Bàn Tay Công Lý"><img src="../TFT_DDragon/img/item/DA_HandOfJustice.png" alt="Bàn Tay Công Lý"></div><div class="item-slot" title="Quyền Năng Khổng Lồ"><img src="../TFT_DDragon/img/item/DA_TitansResolve.png" alt="Quyền Năng Khổng Lồ"></div><div class="item-slot" title="Ngọn Giáo Shojin"><img src="../TFT_DDragon/img/item/DA_SpearOfShojin.png" alt="Ngọn Giáo Shojin"></div>
+          </div>
+        </div>
+        <div class="unit-card">
+          <div class="star-rating-bar">
+            <img src="../assets/stars.png" class="star-icon" alt="★"><img src="../assets/stars.png" class="star-icon" alt="★">
+          </div>
+          <div class="champion-frame cost-5">
+            <img src="../TFT_DDragon/img/champion/TFT18_Maokai_splash_centered_0.TFT_Set18.png" alt="Maokai">
+          </div>
+          <div class="items-row">
+            <div class="item-slot" title="Vuốt Rồng"><img src="../TFT_DDragon/img/item/DA_DragonsClaw.png" alt="Vuốt Rồng"></div><div class="item-slot" title="Giáp Vai Nguyệt Thần"><img src="../TFT_DDragon/img/item/DA_Evenshroud.png" alt="Giáp Vai Nguyệt Thần"></div><div class="item-slot" title="Giáp Máu Warmog"><img src="../TFT_DDragon/img/item/DA_WarmogsArmor.png" alt="Giáp Máu Warmog"></div>
+          </div>
+        </div>
+        <div class="unit-card">
+          <div class="star-rating-bar">
+            <img src="../assets/stars.png" class="star-icon" alt="★"><img src="../assets/stars.png" class="star-icon" alt="★">
+          </div>
+          <div class="champion-frame cost-5">
+            <img src="../TFT_DDragon/img/champion/TFT18_Ivern_splash_centered_0.TFT_Set18.png" alt="Ivern">
+          </div>
+          <div class="items-row">
+            <div class="item-slot" title="Găng Đạo Tặc"><img src="../TFT_DDragon/img/item/DA_ThiefsGloves.png" alt="Găng Đạo Tặc"></div><div class="item-slot" title="Kiếm Súng Hextech"><img src="../TFT_DDragon/img/item/DA_HextechGunblade.png" alt="Kiếm Súng Hextech"></div><div class="item-slot" title="Mũ Phù Thủy Rabadon"><img src="../TFT_DDragon/img/item/DA_RabadonsDeathcap.png" alt="Mũ Phù Thủy Rabadon"></div>
+          </div>
+        </div>
+        <div class="unit-card">
+          <div class="star-rating-bar">
+            <img src="../assets/stars.png" class="star-icon" alt="★">
+          </div>
+          <div class="champion-frame cost-5">
+            <img src="../TFT_DDragon/img/champion/TFT18_Lux_splash_centered_7.TFT_Set18.png" alt="Lux">
+          </div>
+          <div class="items-row">
+            <div class="item-slot" title="Găng Đạo Tặc"><img src="../TFT_DDragon/img/item/DA_ThiefsGloves.png" alt="Găng Đạo Tặc"></div><div class="item-slot" title="Mũ Phù Thủy Rabadon"><img src="../TFT_DDragon/img/item/DA_RabadonsDeathcap.png" alt="Mũ Phù Thủy Rabadon"></div><div class="item-slot" title="Trái Tim Kiên Định"><img src="../TFT_DDragon/img/item/DA_SteadfastHeart.png" alt="Trái Tim Kiên Định"></div>
+          </div>
+        </div>
+        <div class="unit-card">
+          <div class="star-rating-bar">
+            <img src="../assets/stars.png" class="star-icon" alt="★">
+          </div>
+          <div class="champion-frame cost-5">
+            <img src="../TFT_DDragon/img/champion/TFT18_Elder Dragon_splash_centered_24.TFT_Set18.jpg" alt="Elder Dragon">
+          </div>
+          <div class="items-row">
+            <div class="item-slot" title="Áo Choàng Bóng Tối"><img src="../TFT_DDragon/img/item/DA_EdgeOfNight.png" alt="Áo Choàng Bóng Tối"></div><div class="item-slot" title="Gậy Quá Khổ"><img src="../TFT_DDragon/img/item/DA_Component_NeedlesslyLargeRod.png" alt="Gậy Quá Khổ"></div>
+          </div>
+        </div>
+        <div class="unit-card">
+          <div class="star-rating-bar">
+            <img src="../assets/stars.png" class="star-icon" alt="★">
+          </div>
+          <div class="champion-frame cost-4">
+            <img src="../TFT_DDragon/img/champion/TFT18_Malphite_splash_centered_27.TFT_Set18.png" alt="Malphite">
+          </div>
+          <div class="items-row">
+            <div class="item-slot" title="Vuốt Rồng"><img src="../TFT_DDragon/img/item/DA_DragonsClaw.png" alt="Vuốt Rồng"></div><div class="item-slot" title="Mũ Thích Nghi"><img src="../TFT_DDragon/img/item/DA_AdaptiveHelm.png" alt="Mũ Thích Nghi"></div>
+          </div>
+        </div>
+        <div class="unit-card">
+          <div class="star-rating-bar">
+            <img src="../assets/stars.png" class="star-icon" alt="★"><img src="../assets/stars.png" class="star-icon" alt="★">
+          </div>
+          <div class="champion-frame cost-5">
+            <img src="../TFT_DDragon/img/champion/TFT18_Taric_splash_centered_1.TFT_Set18.png" alt="Taric">
+          </div>
+          <div class="items-row">
+            
+          </div>
+        </div>
+        <div class="unit-card">
+          <div class="star-rating-bar">
+            <img src="../assets/stars.png" class="star-icon" alt="★"><img src="../assets/stars.png" class="star-icon" alt="★">
+          </div>
+          <div class="champion-frame cost-1">
+            <img src="../TFT_DDragon/img/champion/TFT18_Brambleback_splash_centered_24.TFT_Set18.jpg" alt="Brambleback">
+          </div>
+          <div class="items-row">
+            
+          </div>
+        </div>
+        <div class="unit-card">
+          <div class="star-rating-bar">
+            <img src="../assets/stars.png" class="star-icon" alt="★">
+          </div>
+          <div class="champion-frame cost-5">
+            <img src="../TFT_DDragon/img/champion/TFT18_Gnar_splash_centered_0.TFT_Set18.png" alt="Gnar">
+          </div>
+          <div class="items-row">
+            
+          </div>
+        </div>
+          </div>
+
+        </section>
+
+        <!-- RIGHT PANEL: LOBBY STANDINGS (TOP 2 -> TOP 8) -->
+        <section class="right-panel">
+          <div class="standing-row">
+          <div class="standing-rank">2ND</div>
+          <div class="standing-name-box">
+            <span class="standing-name">Quyvuongthu2</span>
+          </div>
+          <div class="standing-pts">
+            <span class="pts-num">7</span>
+            <span class="pts-text">ĐIỂM</span>
+          </div>
+        </div>
+        <div class="standing-row">
+          <div class="standing-rank">3RD</div>
+          <div class="standing-name-box">
+            <span class="standing-name">bách quỷ dạ hành</span>
+          </div>
+          <div class="standing-pts">
+            <span class="pts-num">6</span>
+            <span class="pts-text">ĐIỂM</span>
+          </div>
+        </div>
+        <div class="standing-row">
+          <div class="standing-rank">4TH</div>
+          <div class="standing-name-box">
+            <span class="standing-name">quả dưa lê</span>
+          </div>
+          <div class="standing-pts">
+            <span class="pts-num">5</span>
+            <span class="pts-text">ĐIỂM</span>
+          </div>
+        </div>
+        <div class="standing-row">
+          <div class="standing-rank">5TH</div>
+          <div class="standing-name-box">
+            <span class="standing-name">DC Slaydark</span>
+          </div>
+          <div class="standing-pts">
+            <span class="pts-num">4</span>
+            <span class="pts-text">ĐIỂM</span>
+          </div>
+        </div>
+        <div class="standing-row">
+          <div class="standing-rank">6TH</div>
+          <div class="standing-name-box">
+            <span class="standing-name">Banana Bikini</span>
+          </div>
+          <div class="standing-pts">
+            <span class="pts-num">3</span>
+            <span class="pts-text">ĐIỂM</span>
+          </div>
+        </div>
+        <div class="standing-row">
+          <div class="standing-rank">7TH</div>
+          <div class="standing-name-box">
+            <span class="standing-name">DuckMan31</span>
+          </div>
+          <div class="standing-pts">
+            <span class="pts-num">2</span>
+            <span class="pts-text">ĐIỂM</span>
+          </div>
+        </div>
+        <div class="standing-row">
+          <div class="standing-rank">8TH</div>
+          <div class="standing-name-box">
+            <span class="standing-name">AndreisFR</span>
+          </div>
+          <div class="standing-pts">
+            <span class="pts-num">1</span>
+            <span class="pts-text">ĐIỂM</span>
+          </div>
+        </div>
+        </section>
+
+      </main>
+
+    </div>
+  </div>
+</body>
+</html>
