@@ -3,7 +3,7 @@ import SourceTransformPanel from './components/SourceTransformPanel';
 export default function App() {
   return (
     <div className="relative size-full min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-4 overflow-hidden select-none">
-      {/* Subtle Desktop Studio Grid Background */}
+      {/* Subtle Studio Grid Background */}
       <div
         className="absolute inset-0 pointer-events-none opacity-[0.15]"
         style={{
@@ -16,17 +16,17 @@ export default function App() {
         }}
       />
 
-      {/* Control Panel Container */}
+      {/* Control Panel */}
       <main className="relative z-10 my-auto">
         <SourceTransformPanel />
       </main>
 
-      {/* Studio Workspace Footer Indicator */}
+      {/* Footer */}
       <footer className="absolute bottom-3 right-4 z-0 text-[10px] font-mono text-zinc-600 flex items-center gap-3 pointer-events-none">
         <span className="flex items-center gap-1">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Engine Active
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Standalone Mode
         </span>
-        <span>Studio Suite v2.4</span>
+        <span>TFT Post-Match Studio — Open Source (MIT)</span>
       </footer>
     </div>
   );

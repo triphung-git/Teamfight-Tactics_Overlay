@@ -1,8 +1,8 @@
 """
-backend package for TFT Post-Match Studio
+backend package for TFT Post-Match Studio — Standalone Edition
 """
 
-from backend.config import AppConfig, load_overlay_config, save_overlay_config
+from backend.config import AppConfig, load_overlay_config, save_overlay_config, is_configured
 from backend.data_parser import DDragonLoader, parse_tft_match
 from backend.export_service import export_html_to_png
 from backend.match_service import MatchService
@@ -13,6 +13,7 @@ __all__ = [
     "AppConfig",
     "load_overlay_config",
     "save_overlay_config",
+    "is_configured",
     "DDragonLoader",
     "parse_tft_match",
     "export_html_to_png",

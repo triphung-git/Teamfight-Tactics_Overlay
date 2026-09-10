@@ -20,7 +20,10 @@ try:
 except ImportError:
     _HAS_DOTENV = False
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+from backend.paths import get_app_dir, get_bundle_dir, resolve_resource
+
+BASE_DIR = get_app_dir()
+BUNDLE_DIR = get_bundle_dir()
 ENV_PATH = BASE_DIR / ".env"
 OVERLAY_CONFIG_PATH = BASE_DIR / "overlay_config.json"
 
@@ -193,24 +196,29 @@ class AppConfig:
 
 
 def load_overlay_config() -> dict[str, Any]:
-    """Nạp file overlay_config.json."""
+    """Nạp file overlay_config.json với giá trị mặc định trung lập."""
     default_config: dict[str, Any] = {
-        "tournament_title": "HOSC 2026",
-        "stage_title": "LAST CHANCE QUALIFIER",
+        "tournament_title": "YOUR TOURNAMENT NAME",
+        "stage_title": "STAGE / QUALIFIER",
         "game_title": "TEAMFIGHT TACTICS",
         "server_port": 8080,
         "background_image": "assets/background.png",
         "font_family": "League Spartan",
         "player_avatars": {},
-        # Tùy chỉnh Crop & Vị trí Overlay
+        "custom_augments": [],
+        # Transform chuẩn — đồng nhất với TransformState trong React
         "overlay_transform": {
-            "scale": 1.0,
-            "x": 0,
-            "y": 0,
-            "crop_top": 0,
-            "crop_bottom": 0,
-            "crop_left": 0,
-            "crop_right": 0,
+            "posX": 0,
+            "posY": 0,
+            "rotX": 0,
+            "rotY": 0,
+            "rotZ": 0,
+            "zoomX": 100,
+            "zoomY": 100,
+            "cropTop": 0,
+            "cropBottom": 0,
+            "cropLeft": 0,
+            "cropRight": 0,
         },
     }
 
@@ -232,3 +240,16 @@ def save_overlay_config(data: dict[str, Any]) -> dict[str, Any]:
     with open(OVERLAY_CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(current, f, ensure_ascii=False, indent=2)
     return current
+
+
+def is_configured() -> bool:
+    """Kiểm tra nhanh xem người dùng đã cấu hình Riot API key chưa."""
+    reload_env()
+    api_key = os.environ.get("RIOT_API_KEY", "").strip()
+    riot_id = os.environ.get("RIOT_ID", "").strip()
+    return bool(
+        api_key
+        and api_key.startswith("RGAPI-")
+        and len(api_key) > 20
+        and "#" in riot_id
+    )

@@ -8,18 +8,15 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $scriptDir
 
 Write-Host "======================================================================" -ForegroundColor Cyan
-Write-Host "      ⚔️ TFT POST-MATCH STUDIO - FIGMA LANDING PAGE EDITION ⚔️" -ForegroundColor Yellow
+Write-Host "              TFT POST-MATCH STUDIO" -ForegroundColor Yellow
 Write-Host "======================================================================" -ForegroundColor Cyan
 
-# Kiểm tra đường dẫn Python
-$pythonExe = "D:\dev\python.exe"
-if (-not (Test-Path $pythonExe)) {
-    $pythonExe = "python"
-}
+# Dung Python trong PATH
+$pythonExe = "python"
 
-# Kiểm tra nếu Web Overlay chưa build dist thì build
+# Kiem tra neu Web Overlay chua build dist thi build
 if (-not (Test-Path "Web Overlay\dist\index.html")) {
-    Write-Host "[1/2] Đang biên dịch Web Overlay (Figma Landing Page)..." -ForegroundColor Cyan
+    Write-Host "[1/2] Dang bien dich Web Overlay..." -ForegroundColor Cyan
     Push-Location "Web Overlay"
     & npm.cmd run build
     Pop-Location

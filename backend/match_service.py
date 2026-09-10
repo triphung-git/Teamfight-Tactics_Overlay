@@ -25,9 +25,11 @@ from backend.riot_client import (
     RiotTFTClient,
 )
 
+from backend.paths import get_app_dir
+
 logger = logging.getLogger("match_service")
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = get_app_dir()
 OUTPUT_DIR = BASE_DIR / "output"
 
 
@@ -94,6 +96,8 @@ class MatchService:
             api_key=self.config.api_key,
             account_routing=account_routing,
             match_routing=match_routing,
+            timeout=6.0,
+            max_retries=2,
         )
 
         puuid = client.get_puuid_by_riot_id(game_name, tag_line)
@@ -144,6 +148,37 @@ class MatchService:
             progress_callback(100, f"Đã tải hoàn tất {len(parsed_list)} trận đấu!")
 
         return parsed_list
+
+    def fetch_recent_matches_async(
+        self,
+        game_name: str,
+        tag_line: str,
+        region: str,
+        count: int = 1,
+        on_complete: Optional[Callable[[list[dict[str, Any]]], None]] = None,
+        on_error: Optional[Callable[[Exception], None]] = None,
+        progress_callback: Optional[Callable[[int, str], None]] = None,
+    ) -> threading.Thread:
+        """Chạy tải trận ngầm trong luồng riêng để không bao giờ làm đứng/khựng UI."""
+        def _worker():
+            try:
+                res = self.fetch_recent_matches(
+                    game_name=game_name,
+                    tag_line=tag_line,
+                    region=region,
+                    count=count,
+                    progress_callback=progress_callback,
+                )
+                if on_complete:
+                    on_complete(res)
+            except Exception as e:
+                logger.warning("Background fetch match error: %s", e)
+                if on_error:
+                    on_error(e)
+
+        th = threading.Thread(target=_worker, daemon=True, name="AsyncMatchFetcher")
+        th.start()
+        return th
 
     def set_active_match_by_id(self, match_id: str) -> Optional[dict[str, Any]]:
         """Chọn một trận đấu cụ thể để hiển thị lên Overlay."""

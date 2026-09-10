@@ -1,8 +1,10 @@
 """
 desktop/bridge.py
 -----------------
-Cầu nối IPC 2 chiều giữa Giao diện React (Figma Landing Page) và Logic Python.
+Cầu nối IPC 2 chiều giữa Giao diện React (Web Overlay) và Logic Python.
 Cung cấp các hàm API được gọi trực tiếp từ `window.pywebview.api`.
+
+Chế độ Standalone: Mỗi người dùng chạy app của riêng họ, không cần Host server.
 """
 
 from __future__ import annotations
@@ -17,17 +19,21 @@ from typing import Any, Optional
 
 import webview
 
+import time
 from backend.config import AppConfig, load_overlay_config, save_overlay_config
 from backend.export_service import export_html_to_png
+from backend.file_watcher import ConfigWatcher
 from backend.match_service import MatchService
+from backend.network_hub import notify_sync, is_server_running, set_bridge_reference
 from backend.overlay_generator import generate_overlay_html, load_overlay_config as load_generator_config
+from backend.paths import get_app_dir, resolve_resource
 
 logger = logging.getLogger("bridge")
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = get_app_dir()
 OUTPUT_DIR = BASE_DIR / "output"
-ASSETS_DIR = BASE_DIR / "assets"
-AVATARS_DIR = ASSETS_DIR / "avatars"
+ASSETS_DIR = resolve_resource("assets")
+AVATARS_DIR = BASE_DIR / "assets" / "avatars"
 
 DEFAULT_TRANSFORM = {
     "posX": 0,
@@ -45,7 +51,7 @@ DEFAULT_TRANSFORM = {
 
 
 class StudioBridge:
-    """API Object được truyền vào pywebview."""
+    """API Object được truyền vào pywebview — Standalone Edition."""
 
     def __init__(self, match_service: MatchService) -> None:
         self._match_service = match_service
@@ -53,12 +59,18 @@ class StudioBridge:
         self._overlay_window: Optional[webview.Window] = None
         self._is_overlay_visible: bool = False
 
-        # Khởi tạo thư mục avatars nếu chưa có
+        # Khởi tạo thư mục avatars và output nếu chưa có
         AVATARS_DIR.mkdir(parents=True, exist_ok=True)
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-        # Cấu hình callback Auto-polling đẩy dữ liệu về Frontend
+        # Liên kết với local server
+        set_bridge_reference(self)
+
+        # Cấu hình callback Auto-polling
         self._setup_polling_callback()
+
+        # Khởi động File Watcher theo dõi config changes cục bộ
+        self._setup_file_watcher()
 
     def set_windows(
         self, dashboard: webview.Window, overlay: Optional[webview.Window] = None
@@ -79,120 +91,154 @@ class StudioBridge:
 
         self._on_new_match_cb = on_new_match
 
+    def _setup_file_watcher(self) -> None:
+        """Kích hoạt File Watcher theo dõi .env, overlay_config.json và avatars."""
+        self._config_watcher = ConfigWatcher(
+            config_path=BASE_DIR / "overlay_config.json",
+            env_path=BASE_DIR / ".env",
+            avatars_dir=AVATARS_DIR,
+            poll_interval=0.5,
+            debounce_seconds=0.3,
+        )
+
+        def on_cfg_changed():
+            logger.info("overlay_config.json changed → Auto re-rendering")
+            cfg = load_overlay_config()
+            tf = cfg.get("overlay_transform", {})
+            self._compile_and_notify(tf, source="FileWatcher_Config")
+            self.notify_frontend("onAppStateUpdate", {"overlay_config": cfg})
+
+        def on_env_changed():
+            logger.info(".env changed → Reloading config")
+            from backend.config import reload_env
+            reload_env()
+            cfg = AppConfig.load()
+            self._match_service.config = cfg
+            self._match_service.active_puuid = None  # Reset PUUID để tra cứu theo Riot ID mới
+            self.notify_frontend("onAppStateUpdate", {"config": cfg.to_dict()})
+
+            if cfg.api_key and cfg.game_name:
+                def on_matches_fetched(matches):
+                    if matches:
+                        logger.info("Fetched %d matches after .env edit", len(matches))
+                        tf = load_overlay_config().get("overlay_transform", {})
+                        self._compile_and_notify(tf, source="LiveAPI_EnvUpdate")
+                        self.notify_frontend(
+                            "onAppStateUpdate",
+                            {
+                                "active_match": self._match_service.active_match,
+                                "cached_matches": self._match_service.cached_matches,
+                                "fetch_status": {
+                                    "success": True,
+                                    "message": f"Đã nạp trận mới nhất của {cfg.game_name}#{cfg.tag_line}",
+                                    "timestamp": time.time(),
+                                },
+                            },
+                        )
+
+                def on_matches_error(exc):
+                    logger.warning("Failed to fetch matches for %s#%s: %s", cfg.game_name, cfg.tag_line, exc)
+                    self.notify_frontend(
+                        "onAppStateUpdate",
+                        {
+                            "fetch_status": {
+                                "success": False,
+                                "error": str(exc),
+                                "is_auth_error": "401" in str(exc) or "403" in str(exc) or "hết hạn" in str(exc),
+                                "timestamp": time.time(),
+                            },
+                        },
+                    )
+
+                self._match_service.fetch_recent_matches_async(
+                    game_name=cfg.game_name,
+                    tag_line=cfg.tag_line,
+                    region=cfg.region,
+                    count=1,
+                    on_complete=on_matches_fetched,
+                    on_error=on_matches_error,
+                )
+
+        def on_avatars_changed():
+            logger.info("Avatars changed → Refreshing overlay")
+            tf = load_overlay_config().get("overlay_transform", {})
+            self._compile_and_notify(tf, source="FileWatcher_Avatars")
+
+        self._config_watcher.on_config_changed = on_cfg_changed
+        self._config_watcher.on_env_changed = on_env_changed
+        self._config_watcher.on_avatars_changed = on_avatars_changed
+        self._config_watcher.start()
+
     def notify_frontend(self, func_name: str, data: Any) -> None:
-        """Đẩy sự kiện từ Python vào Frontend Javascript an toàn (tránh deadlock cửa sổ ẩn)."""
+        """Đẩy sự kiện từ Python → Frontend Javascript an toàn."""
         js_data = json.dumps(data, ensure_ascii=False)
         script = f"if (window.{func_name}) {{ window.{func_name}({js_data}); }}"
 
         for win in (self._dashboard_window, self._overlay_window):
             if win:
-                # Tuyệt đối không gọi evaluate_js lên cửa sổ overlay khi đang ẩn để tránh Deadlock Semaphore
                 if win == self._overlay_window and not self._is_overlay_visible:
                     continue
                 try:
                     win.evaluate_js(script)
                 except Exception as e:
-                    logger.debug("Không thể evaluate JS trên window: %s", e)
+                    logger.debug("evaluate_js error on window: %s", e)
 
     # ----------------------------------------------------------------- #
-    # Các hàm API chuyên dụng cho Figma Control Panel (SourceTransformPanel)
+    # Core: Biên dịch Overlay & Thông báo cập nhật
     # ----------------------------------------------------------------- #
-    def get_transform(self) -> dict[str, Any]:
-        """Lấy cấu hình transform hiện tại để nạp vào giao diện điều khiển."""
-        cfg = load_overlay_config()
-        saved = cfg.get("overlay_transform", {})
-        merged = dict(DEFAULT_TRANSFORM)
-        if isinstance(saved, dict):
-            merged.update(saved)
-        return merged
+    def _get_best_match_data(self) -> Optional[dict[str, Any]]:
+        """Lấy dữ liệu trận tốt nhất hiện có (memory cache → file cache)."""
+        if self._match_service.active_match:
+            return self._match_service.active_match
 
-    def render_overlay(self, transform: dict[str, Any]) -> dict[str, Any]:
+        if self._match_service.cached_matches:
+            self._match_service.active_match = self._match_service.cached_matches[0]
+            return self._match_service.active_match
+
+        # Tìm file cache tự động — không hardcode tên người dùng
+        candidates = list(OUTPUT_DIR.glob("clean_matches_*.json")) + [
+            OUTPUT_DIR / "clean_matches_latest.json",
+            resolve_resource("output/clean_matches_latest.json"),
+        ]
+        for cand in sorted(set(candidates), key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True):
+            if cand.exists():
+                try:
+                    with open(cand, "r", encoding="utf-8") as f:
+                        cand_list = json.load(f)
+                        if cand_list:
+                            # Ưu tiên trận có người đứng top 1
+                            match_data = next(
+                                (m for m in cand_list if any(
+                                    p.get("placement") == 1 for p in m.get("lobby", [])
+                                )),
+                                cand_list[0]
+                            )
+                            self._match_service.cached_matches = cand_list
+                            self._match_service.active_match = match_data
+                            return match_data
+                except Exception as e:
+                    logger.warning("Failed to read cache %s: %s", cand.name, e)
+        return None
+
+    def _compile_and_notify(self, transform: dict[str, Any], source: str = "Local") -> dict[str, Any]:
         """
-        Xử lý khi người dùng nhấn nút 'Render' trên giao diện:
-        Ưu tiên Cách C:
-          1. Thử lấy trận đấu mới nhất qua Live Riot API bằng key trong .env.
-          2. Nếu lỗi kết nối/hết hạn key/offline, tự động fallback sang file JSON có sẵn
-             (clean_matches_bí_ẹo_0602.json hoặc clean_matches_latest.json).
-          3. Cập nhật tỉ lệ, vị trí và crop vào overlay_config.json.
-          4. Sinh file output/overlay.html chuẩn 1920x1080.
-          5. Xuất ảnh output/overlay_latest.png chuẩn phát sóng (1920x1080).
-          6. Hiển thị / Nạp lại trực tiếp lên Cửa Sổ Overlay trên Desktop Windows.
+        Biên dịch overlay HTML → thông báo OBS/overlay tabs cập nhật mượt mà (không reload).
+        Thay vì broadcast tới các máy khác, chỉ notify local WS để DOM-swap.
         """
-        logger.info("Starting overlay render")
-
-        # 1. Lưu cấu hình transform mới
-        current_cfg = load_overlay_config()
-        current_cfg["overlay_transform"] = transform
-        save_overlay_config(current_cfg)
-
-        match_data = None
-        match_id = "N/A"
-        mode = "Riot Live API"
-
-        # 2. ƯU TIÊN CÁCH C: Thử Live Riot API trước
-        cfg = AppConfig.load()
-        if cfg.api_key and cfg.api_key.strip():
-            try:
-                logger.info("Fetching account %s#%s", cfg.game_name, cfg.tag_line)
-                matches = self._match_service.fetch_recent_matches(
-                    game_name=cfg.game_name,
-                    tag_line=cfg.tag_line,
-                    region=cfg.region,
-                    count=1,
-                )
-                if matches:
-                    match_data = matches[0]
-                    match_id = match_data.get("match_id", "LIVE_MATCH")
-            except Exception as exc:
-                logger.warning("Riot API unavailable: %s (falling back to offline cache)", exc)
-                match_data = None
-
-        # 3. Fallback Offline: Đọc dữ liệu từ file JSON có sẵn nếu API thất bại
+        match_data = self._get_best_match_data()
         if not match_data:
-            mode = "Fallback Offline"
-            candidates = [
-                OUTPUT_DIR / "clean_matches_latest.json",
-                OUTPUT_DIR / "clean_matches_bí_ẹo_0602.json",
-            ]
-            for cand in candidates:
-                if cand.exists():
-                    try:
-                        with open(cand, "r", encoding="utf-8") as f:
-                            cand_list = json.load(f)
-                            if cand_list:
-                                # Ưu tiên trận có Top 1
-                                for m in cand_list:
-                                    t1 = next(
-                                        (p for p in m.get("lobby", []) if p.get("placement") == 1),
-                                        None,
-                                    )
-                                    if t1:
-                                        match_data = m
-                                        break
-                                if not match_data:
-                                    match_data = cand_list[0]
+            logger.error("No match data to compile overlay")
+            return {"success": False, "error": "Chưa có dữ liệu trận đấu. Vui lòng fetch matches trước."}
 
-                                match_id = match_data.get("match_id", cand.stem)
-                                logger.info("Match loaded from cache: %s (%s)", match_id, cand.name)
-                                break
-                    except Exception as e:
-                        logger.warning("Failed to read cache file %s: %s", cand.name, e)
-
-        if not match_data:
-            logger.error("No match data available to render")
-            return {
-                "success": False,
-                "error": "Không thể lấy dữ liệu trận từ Riot API và không tìm thấy file offline.",
-            }
-
-        # 4. Sinh file HTML Overlay chuẩn
+        match_id = match_data.get("match_id", "LIVE_MATCH")
         output_html = OUTPUT_DIR / "overlay.html"
         gen_cfg = load_generator_config(BASE_DIR / "overlay_config.json")
         gen_cfg["overlay_transform"] = transform
+
+        # 1. Sinh file overlay.html
         generate_overlay_html(match_data, gen_cfg, output_html)
 
-        # 5. Xuất ảnh PNG 1920x1080 ngầm bằng luồng riêng (Background Daemon Thread)
-        # giúp Cửa Sổ Overlay xuất hiện tức thì mà không bị khựng chờ Chrome headless
+        # 2. Xuất PNG ngầm
         output_png = OUTPUT_DIR / "overlay_latest.png"
         threading.Thread(
             target=export_html_to_png,
@@ -200,25 +246,102 @@ class StudioBridge:
             daemon=True,
         ).start()
 
-        # 6. Hiển thị / Nạp lại Cửa Sổ Overlay trên Desktop Windows
+        # 3. Reload Overlay Window trên Desktop (nếu có)
         if self._overlay_window:
             try:
-                self._overlay_window.load_url(output_html.resolve().as_uri())
+                server_port = gen_cfg.get("server_port", 8080)
+                self._overlay_window.evaluate_js(
+                    f"if (window.location.pathname === '/overlay') "
+                    f"{{ if (window.smoothUpdate) {{ window.smoothUpdate(); }} "
+                    f"  else {{ window.location.reload(); }} }}"
+                    f"else {{ window.location.href = 'http://127.0.0.1:{server_port}/overlay'; }}"
+                )
                 self._overlay_window.show()
                 self._is_overlay_visible = True
-                logger.info("Overlay updated")
             except Exception as e:
-                logger.warning("Failed to update overlay window: %s", e)
+                logger.debug("Failed to update overlay window: %s", e)
+                try:
+                    server_port = gen_cfg.get("server_port", 8080)
+                    self._overlay_window.load_url(f"http://127.0.0.1:{server_port}/overlay")
+                    self._overlay_window.show()
+                    self._is_overlay_visible = True
+                except Exception:
+                    pass
+
+        # 4. Thông báo WS cục bộ → OBS Browser Source tự fetch & DOM-swap
+        notify_sync({
+            "type": "OVERLAY_RENDERED",
+            "success": True,
+            "match_id": match_id,
+            "source": source,
+            "timestamp": time.time(),
+        })
 
         return {
             "success": True,
             "match_id": match_id,
-            "mode": mode,
+            "mode": source,
             "png_path": str(output_png.resolve()),
         }
 
+    def render_overlay(self, transform: dict[str, Any]) -> dict[str, Any]:
+        """
+        Xử lý nút 'Render':
+        1. Render ngay từ cache cục bộ (<50ms).
+        2. Chạy ngầm kiểm tra Riot Live API, nếu có trận mới → tự động cập nhật.
+        """
+        logger.info("Rendering overlay (standalone mode)")
+
+        # Lưu transform mới
+        current_cfg = load_overlay_config()
+        current_cfg["overlay_transform"] = transform
+        save_overlay_config(current_cfg)
+
+        # Phase 1: Render ngay lập tức
+        res = self._compile_and_notify(transform, source="InstantRender")
+
+        # Phase 2: Async check Riot API
+        cfg = AppConfig.load()
+        if cfg.api_key and cfg.api_key.strip() and cfg.game_name:
+            def on_api_complete(matches):
+                if matches:
+                    logger.info("Riot API returned %d matches → updating overlay", len(matches))
+                    self._compile_and_notify(transform, source="RiotLiveAPI")
+                    self.notify_frontend(
+                        "onAppStateUpdate",
+                        {
+                            "active_match": self._match_service.active_match,
+                            "cached_matches": self._match_service.cached_matches,
+                        },
+                    )
+
+            def on_api_error(exc):
+                logger.warning("Riot API check failed (using cached data): %s", exc)
+                self.notify_frontend(
+                    "onAppStateUpdate",
+                    {
+                        "fetch_status": {
+                            "success": False,
+                            "error": str(exc),
+                            "is_auth_error": "401" in str(exc) or "403" in str(exc) or "hết hạn" in str(exc),
+                            "timestamp": time.time(),
+                        }
+                    }
+                )
+
+            self._match_service.fetch_recent_matches_async(
+                game_name=cfg.game_name,
+                tag_line=cfg.tag_line,
+                region=cfg.region,
+                count=1,
+                on_complete=on_api_complete,
+                on_error=on_api_error,
+            )
+
+        return res
+
     def toggle_overlay_visibility(self, visible: bool) -> bool:
-        """Bật/tắt hiển thị Cửa sổ Overlay từ nút Hide/Show."""
+        """Bật/tắt hiển thị Cửa sổ Overlay."""
         if self._overlay_window:
             if visible:
                 self._overlay_window.show()
@@ -230,30 +353,39 @@ class StudioBridge:
         return False
 
     def close_panel(self) -> None:
-        """Đóng ứng dụng điều khiển."""
-        logger.info("Closing studio controller")
+        """Đóng ứng dụng."""
+        logger.info("Closing studio")
         if self._dashboard_window:
             self._dashboard_window.destroy()
 
     # ----------------------------------------------------------------- #
-    # Các hàm API bổ trợ mở rộng
+    # API bổ trợ
     # ----------------------------------------------------------------- #
+    def get_transform(self) -> dict[str, Any]:
+        """Lấy cấu hình transform hiện tại."""
+        cfg = load_overlay_config()
+        saved = cfg.get("overlay_transform", {})
+        merged = dict(DEFAULT_TRANSFORM)
+        if isinstance(saved, dict):
+            merged.update(saved)
+        return merged
+
     def get_app_state(self) -> dict[str, Any]:
-        """Trả về toàn bộ trạng thái hiện tại của ứng dụng."""
+        """Trả về toàn bộ trạng thái ứng dụng."""
         cfg = AppConfig.load()
         overlay_cfg = load_overlay_config()
 
         cached = self._match_service.cached_matches
         if not cached:
-            latest_cache = OUTPUT_DIR / "clean_matches_latest.json"
-            if not latest_cache.exists():
-                fallback_files = list(OUTPUT_DIR.glob("clean_matches_*.json"))
-                if fallback_files:
-                    latest_cache = fallback_files[0]
-
-            if latest_cache.exists():
+            # Tự động load từ file cache mới nhất
+            cache_files = sorted(
+                OUTPUT_DIR.glob("clean_matches_*.json"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if cache_files:
                 try:
-                    with open(latest_cache, "r", encoding="utf-8") as f:
+                    with open(cache_files[0], "r", encoding="utf-8") as f:
                         cached = json.load(f)
                         self._match_service.cached_matches = cached
                         if cached and not self._match_service.active_match:
@@ -268,7 +400,14 @@ class StudioBridge:
             "active_match": self._match_service.active_match,
             "is_polling": self._match_service.is_polling_active(),
             "is_overlay_visible": self._is_overlay_visible,
+            "is_configured": bool(cfg.api_key and cfg.game_name),
+            "obs_url": "http://localhost:8080/overlay",
         }
+
+    def is_configured(self) -> bool:
+        """Kiểm tra xem người dùng đã cấu hình API key chưa."""
+        cfg = AppConfig.load()
+        return bool(cfg.api_key and cfg.api_key.startswith("RGAPI-") and cfg.game_name)
 
     def save_app_config(self, config_data: dict[str, Any]) -> dict[str, Any]:
         """Lưu cấu hình Riot API vào file .env."""
@@ -291,7 +430,7 @@ class StudioBridge:
             return {"success": False, "error": str(e)}
 
     def update_overlay_transform(self, transform_data: dict[str, Any]) -> dict[str, Any]:
-        """Cập nhật tỉ lệ, vị trí và crop cho Overlay."""
+        """Cập nhật transform cho Overlay."""
         current = load_overlay_config()
         current["overlay_transform"] = transform_data
         save_overlay_config(current)
@@ -299,7 +438,7 @@ class StudioBridge:
         return {"success": True}
 
     def fetch_matches(self, count: int = 5) -> list[dict[str, Any]]:
-        """Lấy danh sách các trận gần nhất từ Riot API và báo cáo tiến trình."""
+        """Lấy danh sách các trận gần nhất từ Riot API."""
         cfg = AppConfig.load()
 
         def on_progress(pct: int, status_text: str) -> None:
@@ -333,7 +472,7 @@ class StudioBridge:
         return active
 
     def toggle_overlay(self) -> bool:
-        """Bật/tắt ẩn hiện cửa sổ Overlay Window."""
+        """Bật/tắt ẩn hiện cửa sổ Overlay."""
         if not self._overlay_window:
             return False
 
@@ -362,7 +501,7 @@ class StudioBridge:
             self.notify_frontend("onAppStateUpdate", {"is_overlay_visible": False})
 
     def export_png(self) -> dict[str, Any]:
-        """Xuất ảnh PNG 1920x1080 chuẩn chất lượng phát sóng."""
+        """Xuất ảnh PNG 1920x1080."""
         output_png = OUTPUT_DIR / "overlay_latest.png"
         html_file = OUTPUT_DIR / "overlay.html"
 
@@ -381,7 +520,7 @@ class StudioBridge:
             return {"success": False, "error": "Không thể kết xuất ảnh PNG."}
 
     def set_auto_polling(self, enabled: bool, interval: int = 60) -> bool:
-        """Bật/Tắt luồng quét ngầm phát hiện trận đấu mới."""
+        """Bật/Tắt luồng tự động phát hiện trận mới."""
         if enabled:
             ok = self._match_service.start_auto_polling(
                 interval_seconds=interval, on_new_match_callback=self._on_new_match_cb
@@ -394,7 +533,7 @@ class StudioBridge:
         return is_p
 
     def pick_avatar_file(self, player_name: str) -> dict[str, Any]:
-        """Mở hộp thoại chọn file ảnh trên Windows và gán cho tuyển thủ."""
+        """Mở hộp thoại chọn ảnh avatar cho tuyển thủ."""
         if not self._dashboard_window:
             return {"success": False, "error": "Cửa sổ chưa khởi tạo"}
 
@@ -421,3 +560,116 @@ class StudioBridge:
                 return {"success": True, "path": rel_path}
 
         return {"success": False, "canceled": True}
+
+    def get_obs_info(self) -> dict[str, Any]:
+        """Thông tin để cài đặt OBS Browser Source."""
+        cfg = load_overlay_config()
+        port = cfg.get("server_port", 8080)
+        return {
+            "obs_url": f"http://localhost:{port}/overlay",
+            "control_url": f"http://localhost:{port}/app",
+            "width": 1920,
+            "height": 1080,
+            "is_server_running": is_server_running(),
+            "instructions": [
+                "Mở OBS Studio",
+                "Add Source → Browser Source",
+                f"URL: http://localhost:{port}/overlay",
+                "Width: 1920, Height: 1080",
+                "Tick 'Refresh browser when scene becomes active'",
+            ],
+        }
+
+    def get_riot_config(self) -> dict[str, Any]:
+        """Lấy thông tin cấu hình Riot hiện tại."""
+        cfg = AppConfig.load()
+        masked_key = f"{cfg.api_key[:6]}...{cfg.api_key[-4:]}" if len(cfg.api_key) > 10 else (cfg.api_key or "")
+        return {
+            "riot_id": cfg.riot_id or f"{cfg.game_name}#{cfg.tag_line}",
+            "game_name": cfg.game_name,
+            "tag_line": cfg.tag_line,
+            "region": cfg.region,
+            "api_key_masked": masked_key,
+            "has_api_key": bool(cfg.api_key),
+            "is_polling": self._match_service.is_polling_active(),
+            "active_match_id": self._match_service.last_seen_match_id,
+        }
+
+    def update_riot_id(self, riot_id_str: str) -> dict[str, Any]:
+        """Cập nhật Riot ID (GameName#TagLine) và lưu vào .env."""
+        riot_id_str = riot_id_str.strip()
+        if not riot_id_str:
+            return {"success": False, "error": "Riot ID không được để trống"}
+        if "#" not in riot_id_str:
+            return {"success": False, "error": "Riot ID phải kèm theo #TAG (ví dụ: TenNguoiChoi#VN2)"}
+
+        AppConfig.save_env_values({"riot_id": riot_id_str})
+        cfg = AppConfig.load()
+        self._match_service.config = cfg
+        self._match_service.active_puuid = None
+
+        return self.fetch_live_now()
+
+    def update_api_key(self, api_key_str: str) -> dict[str, Any]:
+        """Cập nhật Riot API Key mới vào .env."""
+        api_key_str = api_key_str.strip()
+        if not api_key_str:
+            return {"success": False, "error": "API Key không được để trống"}
+
+        AppConfig.save_env_values({"api_key": api_key_str})
+        cfg = AppConfig.load()
+        self._match_service.config = cfg
+        self._match_service.active_puuid = None
+
+        return {"success": True, "message": "Đã lưu API Key mới vào .env"}
+
+    def fetch_live_now(self) -> dict[str, Any]:
+        """Kích hoạt tải trận đấu mới nhất ngay lập tức."""
+        cfg = AppConfig.load()
+        if not cfg.api_key:
+            return {"success": False, "error": "Chưa điền RIOT_API_KEY trong file .env"}
+        if not cfg.game_name:
+            return {"success": False, "error": "Chưa điền RIOT_ID trong file .env"}
+
+        def on_complete(matches):
+            if matches:
+                tf = load_overlay_config().get("overlay_transform", {})
+                self._compile_and_notify(tf, source="ManualLiveFetch")
+                self.notify_frontend(
+                    "onAppStateUpdate",
+                    {
+                        "active_match": self._match_service.active_match,
+                        "cached_matches": self._match_service.cached_matches,
+                        "fetch_status": {
+                            "success": True,
+                            "message": f"Đã tải thành công trận mới của {cfg.game_name}#{cfg.tag_line}",
+                            "timestamp": time.time(),
+                        },
+                    },
+                )
+
+        def on_error(exc):
+            logger.warning("Manual live fetch error: %s", exc)
+            self.notify_frontend(
+                "onAppStateUpdate",
+                {
+                    "fetch_status": {
+                        "success": False,
+                        "error": str(exc),
+                        "is_auth_error": "401" in str(exc) or "403" in str(exc) or "hết hạn" in str(exc),
+                        "timestamp": time.time(),
+                    }
+                },
+            )
+
+        self._match_service.fetch_recent_matches_async(
+            game_name=cfg.game_name,
+            tag_line=cfg.tag_line,
+            region=cfg.region,
+            count=1,
+            on_complete=on_complete,
+            on_error=on_error,
+        )
+
+        return {"success": True, "message": f"Đang kết nối Riot API tải trận của {cfg.game_name}#{cfg.tag_line}..."}
+

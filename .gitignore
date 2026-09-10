@@ -1,0 +1,47 @@
+# ============================================================
+# TFT Post-Match Studio — .gitignore (Open Source Edition)
+# ============================================================
+
+# === THÔNG TIN CÁ NHÂN & BẢO MẬT — KHÔNG BAO GIỜ COMMIT ===
+.env
+*.env.local
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.spec.bak
+.venv/
+venv/
+env/
+
+# === Node.js / Frontend ===
+node_modules/
+Web Overlay/dist/
+Web Overlay/.cache/
+pnpm-lock.yaml
+package-lock.json
+
+# === Output & Cache (dữ liệu người dùng) ===
+output/
+scratch/
+*.log
+
+# === Assets cá nhân ===
+assets/avatars/
+
+# === PyInstaller Build Artifacts ===
+dist_setup/
+*.exe
+installer.iss.bak
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

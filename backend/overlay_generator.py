@@ -31,15 +31,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger("overlay_generator")
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-TEMPLATES_DIR = BASE_DIR / "templates"
-ASSETS_DIR = BASE_DIR / "assets"
+from backend.paths import get_app_dir, get_bundle_dir, resolve_resource
+
+BASE_DIR = get_app_dir()
+BUNDLE_DIR = get_bundle_dir()
+TEMPLATES_DIR = resolve_resource("templates")
+ASSETS_DIR = resolve_resource("assets")
 OUTPUT_DIR = BASE_DIR / "output"
-DDRAGON_IMG_DIR = BASE_DIR / "TFT_DDragon" / "img"
+DDRAGON_IMG_DIR = resolve_resource("TFT_DDragon/img")
 
 DEFAULT_CONFIG_FILE = BASE_DIR / "overlay_config.json"
-DEFAULT_TEMPLATE_FILE = TEMPLATES_DIR / "overlay.html"
-DEFAULT_CSS_FILE = TEMPLATES_DIR / "overlay.css"
+DEFAULT_TEMPLATE_FILE = resolve_resource("templates/overlay.html")
+DEFAULT_CSS_FILE = resolve_resource("templates/overlay.css")
 
 
 def load_overlay_config(config_path: Path) -> dict:
@@ -125,6 +128,9 @@ def find_avatar_url(player_name: str, display_name: str, companion_img: str, con
     return "../assets/background.png"
 
 
+_AUGMENT_CACHE: dict[str, dict] = {}
+
+
 def resolve_custom_augment(item: Any, config: dict) -> dict:
     """Xác định tên và ảnh của lõi nâng cấp từ cấu hình (hỗ trợ file, tên Việt/Anh, mã ID, không phân biệt hoa thường/đuôi .png)."""
     import re
@@ -138,17 +144,25 @@ def resolve_custom_augment(item: Any, config: dict) -> dict:
         if not val:
             return {"name": "Augment", "image": ""}
 
+        cache_key = f"{val}_{config.get('language', 'vi_VN')}"
+        if cache_key in _AUGMENT_CACHE:
+            return _AUGMENT_CACHE[cache_key]
+
         aug_set = get_image_set("augment")
         aug_lower = {f.lower(): f for f in aug_set}
 
         # 1. Khớp trực tiếp tên file ảnh có trong thư mục (chính xác hoặc không phân biệt hoa thường)
         if val in aug_set:
-            return {"name": Path(val).stem, "image": val}
+            res = {"name": Path(val).stem, "image": val}
+            _AUGMENT_CACHE[cache_key] = res
+            return res
         if val.lower() in aug_lower:
-            return {"name": Path(val).stem, "image": aug_lower[val.lower()]}
+            res = {"name": Path(val).stem, "image": aug_lower[val.lower()]}
+            _AUGMENT_CACHE[cache_key] = res
+            return res
 
         # 2. Xóa đuôi file nếu người dùng gõ nhầm đuôi .png/.jpg vào tên lõi (vd: "Cluttered Mind.png" -> "Cluttered Mind")
-        query = re.sub(r'\.(png|jpg)$', '', val, flags=re.IGNORECASE).strip()
+        query = re.sub(r'\.(png|jpg|jpeg|webp)$', '', val, flags=re.IGNORECASE).strip()
         query_norm = re.sub(r'[^a-zA-Z0-9]', '', query).lower()
 
         from backend.data_parser import get_ddragon_loader
@@ -166,41 +180,60 @@ def resolve_custom_augment(item: Any, config: dict) -> dict:
             for aid, img in loader.augment_images.items():
                 aid_norm = re.sub(r'[^a-zA-Z0-9]', '', aid).lower()
                 if query.lower() == aid.lower() or (query_norm and query_norm == aid_norm):
-                    return {"name": loader.augments.get(aid, query), "image": img}
+                    actual_img = img if img in aug_set else aug_lower.get(img.lower(), "")
+                    res = {"name": loader.augments.get(aid, query), "image": actual_img}
+                    _AUGMENT_CACHE[cache_key] = res
+                    return res
 
             # Khớp chính xác Tên (vd: "Bừa Bộn", "Cluttered Mind", "U.R.F.")
             for aid, aname in loader.augments.items():
                 aname_norm = re.sub(r'[^a-zA-Z0-9]', '', aname).lower()
                 if query.lower() == aname.lower() or (query_norm and query_norm == aname_norm):
-                    return {"name": aname, "image": loader.augment_images.get(aid, "")}
+                    raw_img = loader.augment_images.get(aid, "")
+                    actual_img = raw_img if raw_img in aug_set else aug_lower.get(raw_img.lower(), "")
+                    res = {"name": aname, "image": actual_img}
+                    _AUGMENT_CACHE[cache_key] = res
+                    return res
 
             # Khớp một phần Tên
             for aid, aname in loader.augments.items():
                 aname_norm = re.sub(r'[^a-zA-Z0-9]', '', aname).lower()
                 if query_norm and query_norm in aname_norm:
-                    return {"name": aname, "image": loader.augment_images.get(aid, "")}
+                    raw_img = loader.augment_images.get(aid, "")
+                    actual_img = raw_img if raw_img in aug_set else aug_lower.get(raw_img.lower(), "")
+                    res = {"name": aname, "image": actual_img}
+                    _AUGMENT_CACHE[cache_key] = res
+                    return res
 
             # Khớp một phần ID
             for aid, img in loader.augment_images.items():
                 aid_norm = re.sub(r'[^a-zA-Z0-9]', '', aid).lower()
                 if query_norm and query_norm in aid_norm:
-                    return {"name": loader.augments.get(aid, query), "image": img}
+                    actual_img = img if img in aug_set else aug_lower.get(img.lower(), "")
+                    res = {"name": loader.augments.get(aid, query), "image": actual_img}
+                    _AUGMENT_CACHE[cache_key] = res
+                    return res
 
         # 4. Tìm kiếm mờ theo tên file ảnh trong thư mục augment
         if query_norm:
             for f in aug_set:
                 f_norm = re.sub(r'[^a-zA-Z0-9]', '', f).lower()
                 if query_norm in f_norm:
-                    return {"name": query, "image": f}
+                    res = {"name": query, "image": f}
+                    _AUGMENT_CACHE[cache_key] = res
+                    return res
 
-        return {"name": val, "image": ""}
+        res = {"name": val, "image": ""}
+        _AUGMENT_CACHE[cache_key] = res
+        return res
     return {"name": "Augment", "image": ""}
 
 
 def build_augments_html(augments_detailed: list[dict], config: Optional[dict] = None) -> str:
-    """Tạo HTML cho 3 lõi nâng cấp (hỗ trợ custom_augments từ overlay_config.json)."""
+    """Tạo HTML cho 3 lõi nâng cấp với Fallback Image Guard bảo vệ chống vỡ ảnh."""
     cfg = config or {}
     custom = cfg.get("custom_augments", [])
+    aug_set = get_image_set("augment")
 
     items_to_render = []
     if custom and isinstance(custom, list):
@@ -213,11 +246,12 @@ def build_augments_html(augments_detailed: list[dict], config: Optional[dict] = 
     for aug in items_to_render:
         img_name = aug.get("image") or ""
         name = aug.get("name") or "Augment"
-        img_path = f"../TFT_DDragon/img/augment/{img_name}" if img_name else ""
-        if img_path:
+        if img_name and img_name in aug_set:
+            img_path = f"../TFT_DDragon/img/augment/{img_name}"
             slot_html = f'<div class="augment-slot" title="{name}"><img src="{img_path}" alt="{name}"></div>'
         else:
-            slot_html = f'<div class="augment-slot empty-slot" title="{name}"></div>'
+            # Fallback thanh lịch nếu không tìm thấy file ảnh (không bao giờ sinh thẻ img lỗi [x])
+            slot_html = f'<div class="augment-slot empty-slot" title="{name}"><span style="font-size:10px;text-align:center;padding:4px;color:#caa867;line-height:1.2;font-weight:700;">{name}</span></div>'
         slots.append(slot_html)
 
     # Đảm bảo luôn có đủ 3 ô lõi
@@ -228,14 +262,17 @@ def build_augments_html(augments_detailed: list[dict], config: Optional[dict] = 
 
 
 def build_units_html(units: list[dict]) -> str:
-    """Tạo HTML cho dải tướng trên bàn cờ của Top 1 với ngôi sao trên đỉnh."""
+    """Tạo HTML cho dải tướng trên bàn cờ của Top 1 với Image Guard."""
+    champ_set = get_image_set("champion")
+    item_set = get_image_set("item")
     unit_cards = []
+
     for u in units:
         tier = max(1, min(4, u.get("tier", 1)))
         cost = u.get("cost", 1)
         name = u.get("name", "Champion")
         char_img = u.get("image", "")
-        img_url = f"../TFT_DDragon/img/champion/{char_img}" if char_img else ""
+        img_url = f"../TFT_DDragon/img/champion/{char_img}" if (char_img and char_img in champ_set) else ""
 
         # Sinh danh sách các ngôi sao sử dụng ảnh assets/stars.png
         stars_html = "".join(
@@ -247,11 +284,13 @@ def build_units_html(units: list[dict]) -> str:
         for item in raw_items[:3]:
             iimg = item.get("image", "")
             iname = item.get("name", "Trang bị")
-            if iimg:
+            if iimg and iimg in item_set:
                 items_html.append(
                     f'<div class="item-slot" title="{iname}"><img src="../TFT_DDragon/img/item/{iimg}" alt="{iname}"></div>'
                 )
         items_row_content = "".join(items_html)
+
+        champ_content = f'<img src="{img_url}" alt="{name}">' if img_url else f'<span style="font-size:10px;color:#caa867;display:flex;align-items:center;justify-content:center;height:100%;">{name[:4]}</span>'
 
         card = f"""
         <div class="unit-card">
@@ -259,7 +298,7 @@ def build_units_html(units: list[dict]) -> str:
             {stars_html}
           </div>
           <div class="champion-frame cost-{cost}">
-            <img src="{img_url}" alt="{name}">
+            {champ_content}
           </div>
           <div class="items-row">
             {items_row_content}
@@ -309,6 +348,24 @@ def build_lobby_standings_html(lobby: list[dict]) -> str:
     return "\n        ".join(rows)
 
 
+_TEMPLATE_CACHE: str = ""
+_TEMPLATE_MTIME: float = 0.0
+
+
+def _get_html_template() -> str:
+    """Nạp template HTML với invalidation theo mtime — tự cập nhật khi file thay đổi."""
+    global _TEMPLATE_CACHE, _TEMPLATE_MTIME
+    try:
+        current_mtime = DEFAULT_TEMPLATE_FILE.stat().st_mtime
+        if not _TEMPLATE_CACHE or current_mtime != _TEMPLATE_MTIME:
+            with open(DEFAULT_TEMPLATE_FILE, "r", encoding="utf-8") as f:
+                _TEMPLATE_CACHE = f.read()
+            _TEMPLATE_MTIME = current_mtime
+    except Exception as exc:
+        logger.warning("Không thể đọc template: %s", exc)
+    return _TEMPLATE_CACHE
+
+
 def generate_overlay_html(
     match_data: dict,
     config: dict,
@@ -333,9 +390,8 @@ def generate_overlay_html(
     units_html = build_units_html(top1.get("units", []))
     standings_html = build_lobby_standings_html(lobby)
 
-    # 3. Đọc template
-    with open(DEFAULT_TEMPLATE_FILE, "r", encoding="utf-8") as f:
-        html_template = f.read()
+    # 3. Đọc template từ RAM cache
+    html_template = _get_html_template()
 
     # 4. Thay thế biến
     rendered = html_template.replace("{{ GAME_TITLE }}", config.get("game_title", "TEAMFIGHT TACTICS"))
@@ -373,9 +429,10 @@ def generate_overlay_html(
     with open(output_html_path, "w", encoding="utf-8") as f:
         f.write(rendered)
 
-    # 6. Đồng bộ file CSS sang output/
+    # 6. Đồng bộ file CSS sang output/ (chỉ copy nếu chưa có hoặc file nguồn mới hơn)
     output_css_path = output_html_path.parent / "overlay.css"
-    shutil.copy(DEFAULT_CSS_FILE, output_css_path)
+    if not output_css_path.exists() or (DEFAULT_CSS_FILE.exists() and output_css_path.stat().st_mtime < DEFAULT_CSS_FILE.stat().st_mtime):
+        shutil.copy(DEFAULT_CSS_FILE, output_css_path)
 
     logger.info("Overlay created")
     return output_html_path

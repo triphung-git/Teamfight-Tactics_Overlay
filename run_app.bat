@@ -1,22 +1,19 @@
 @echo off
 cd /d "%~dp0"
 chcp 65001 > nul
-title TFT Post-Match Studio - Figma Esports Edition
+title TFT Post-Match Studio
 color 0b
 
 echo ======================================================================
-echo       ⚔️ TFT POST-MATCH STUDIO - FIGMA LANDING PAGE EDITION ⚔️
+echo              TFT POST-MATCH STUDIO
 echo ======================================================================
 echo.
 
-set PYTHON_EXE=D:\dev\python.exe
-if not exist "%PYTHON_EXE%" (
-    set PYTHON_EXE=python
-)
+set PYTHON_EXE=python
 
-:: Kiem tra neu Web Overlay (Figma Landing Page) chua build dist thi tu dong build
+:: Kiem tra neu Web Overlay chua build dist thi tu dong build
 if not exist "Web Overlay\dist\index.html" (
-    echo [1/2] Dang bien dich Web Overlay (Figma Landing Page)...
+    echo [1/2] Dang bien dich Web Overlay...
     cd "Web Overlay"
     call npm.cmd run build
     cd ..

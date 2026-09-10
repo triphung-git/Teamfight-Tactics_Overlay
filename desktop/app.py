@@ -1,12 +1,12 @@
 """
 desktop/app.py
 --------------
-Entrypoint chính khởi động Ứng Dụng Hybrid Desktop TFT Post-Match Studio trên Windows.
-Sử dụng thiết kế giao diện Figma Landing Page (Web Overlay) và nhân WebView2 siêu mượt.
+Entrypoint khởi động TFT Post-Match Studio — Standalone Edition.
+Mỗi người dùng chạy app của riêng họ, không cần kết nối máy Host.
 
 Quản lý 2 cửa sổ:
-    1. Cửa sổ Controller: Bảng điều khiển Transform, Crop, Position, Rotation, Zoom & Render.
-    2. Cửa sổ Overlay: Chiếu hình ảnh Overlay chuẩn 1920x1080 trực tiếp lên Windows Desktop / OBS.
+    1. Control Panel: Bảng điều khiển Transform, Render & Cấu hình.
+    2. Overlay Window: Hiển thị overlay trực tiếp, kết nối với OBS.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Đảm bảo Windows terminal in UTF-8 và kích hoạt Per-Monitor DPI Awareness
+# UTF-8 và DPI Awareness trên Windows
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -54,61 +54,92 @@ logging.basicConfig(
 )
 logger = logging.getLogger("desktop_app")
 
+from backend.paths import get_app_dir, resolve_resource
+from backend.network_hub import start_server
+
+BASE_DIR = get_app_dir()
 OUTPUT_DIR = BASE_DIR / "output"
-WEB_OVERLAY_DIST = BASE_DIR / "Web Overlay" / "dist" / "index.html"
+WEB_OVERLAY_DIST = resolve_resource("Web Overlay/dist/index.html")
+SERVER_PORT = 8080
 
 
 def ensure_prerequisites() -> None:
-    """Đảm bảo các file HTML và dữ liệu mẫu sẵn sàng trước khi nạp cửa sổ."""
+    """Đảm bảo các file HTML và dữ liệu sẵn sàng trước khi mở cửa sổ."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 1. Kiểm tra build giao diện Figma Landing Page
-    if not WEB_OVERLAY_DIST.exists():
+    # Build UI bundle nếu chưa có (chỉ khi chạy từ mã nguồn)
+    if not WEB_OVERLAY_DIST.exists() and not getattr(sys, "frozen", False):
         logger.info("Building UI bundle: Web Overlay")
-        web_overlay_dir = BASE_DIR / "Web Overlay"
+        web_overlay_dir = resolve_resource("Web Overlay")
         try:
             subprocess.run(["npm.cmd", "run", "build"], cwd=web_overlay_dir, check=True)
             logger.info("UI bundle built successfully")
         except Exception as e:
             logger.error("Failed to build UI bundle: %s", e)
 
-    # 2. Kiểm tra file output/overlay.html
+    # Biên dịch overlay.html từ cache mới nhất khi khởi động
     overlay_html = OUTPUT_DIR / "overlay.html"
-    if not overlay_html.exists():
-        candidates = [
-            OUTPUT_DIR / "clean_matches_latest.json",
-            OUTPUT_DIR / "clean_matches_bí_ẹo_0602.json",
-        ]
-        for cand in candidates:
-            if cand.exists():
-                try:
-                    with open(cand, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        if data:
-                            cfg = load_generator_config(BASE_DIR / "overlay_config.json")
-                            generate_overlay_html(data[0], cfg, overlay_html)
-                            break
-                except Exception as e:
-                    logger.warning("Failed to initialize template: %s", e)
+    cache_files = sorted(
+        OUTPUT_DIR.glob("clean_matches_*.json"),
+        key=lambda p: p.stat().st_mtime if p.exists() else 0,
+        reverse=True,
+    )
+    if not cache_files:
+        # Kiểm tra trong bundle
+        bundled = resolve_resource("output/clean_matches_latest.json")
+        if bundled.exists():
+            cache_files = [bundled]
+
+    for cand in cache_files:
+        if cand.exists():
+            try:
+                with open(cand, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if data:
+                        cfg = load_generator_config(BASE_DIR / "overlay_config.json")
+                        generate_overlay_html(data[0], cfg, overlay_html)
+                        logger.info("Overlay compiled from: %s", cand.name)
+                        break
+            except Exception as e:
+                logger.warning("Failed to compile overlay from %s: %s", cand.name, e)
 
 
 def main() -> None:
-    print("TFT POST-MATCH STUDIO", flush=True)
-    print(f"UI: {WEB_OVERLAY_DIST.resolve()}", flush=True)
-    print(f"Overlay: {(OUTPUT_DIR / 'overlay.html').resolve()}", flush=True)
-    print("Runtime: Microsoft Edge WebView2\n", flush=True)
+    print("══════════════════════════════════════════", flush=True)
+    print("   ⚔️  TFT POST-MATCH STUDIO  ⚔️", flush=True)
+    print("   Standalone Edition — Open Source", flush=True)
+    print("══════════════════════════════════════════", flush=True)
 
     ensure_prerequisites()
 
-    # 1. Khởi tạo Backend Services & IPC Bridge
+    # Đọc cấu hình
+    cfg = load_generator_config(BASE_DIR / "overlay_config.json")
+    server_port = int(cfg.get("server_port", SERVER_PORT))
+
+    # Khởi động Local HTTP Server (127.0.0.1 only)
+    start_server(port=server_port)
+
+    print(f"[✓] Local Server:      http://127.0.0.1:{server_port}", flush=True)
+    print(f"[✓] OBS Browser Source: http://localhost:{server_port}/overlay", flush=True)
+    print(f"[✓] Control Panel:     http://localhost:{server_port}/app", flush=True)
+    print("══════════════════════════════════════════\n", flush=True)
+
+    # Khởi động services
     match_service = MatchService()
     bridge = StudioBridge(match_service=match_service)
 
-    # 2. Tạo Cửa Sổ 1: Figma Control Panel (520x800)
-    controller_url = WEB_OVERLAY_DIST.resolve().as_uri()
+    # URL cho hai cửa sổ
+    overlay_url = f"http://127.0.0.1:{server_port}/overlay"
 
+    # Control Panel: load từ file build hoặc local server
+    if WEB_OVERLAY_DIST.exists():
+        controller_url = WEB_OVERLAY_DIST.resolve().as_uri()
+    else:
+        controller_url = f"http://127.0.0.1:{server_port}/app"
+
+    # Cửa sổ 1: Control Panel (520x800)
     controller_win = webview.create_window(
-        title="OVERLAY POSTMATCH TFT - Studio Controller",
+        title="TFT Post-Match Studio — Control Panel",
         url=controller_url,
         width=520,
         height=800,
@@ -118,11 +149,7 @@ def main() -> None:
         background_color="#09090b",
     )
 
-    # 3. Tạo Cửa Sổ 2: Broadcast Overlay chuẩn 16:9 trên Windows Desktop
-    overlay_html = OUTPUT_DIR / "overlay.html"
-    overlay_url = overlay_html.resolve().as_uri()
-
-    # Tính kích thước cửa sổ 16:9 vừa vặn với kích thước màn hình làm việc
+    # Cửa sổ 2: Overlay Preview (16:9)
     try:
         import ctypes
         user32 = ctypes.windll.user32
@@ -133,21 +160,21 @@ def main() -> None:
         overlay_w, overlay_h = 1600, 900
 
     overlay_win = webview.create_window(
-        title="TFT Broadcast Overlay (1920x1080 Responsive)",
+        title="TFT Post-Match Studio — Overlay Preview",
         url=overlay_url,
         width=overlay_w,
         height=overlay_h,
         resizable=True,
-        hidden=True,  # Ẩn mặc định, tự động hiện khi nhấn Render hoặc nút Show
-        background_color="#043933",
+        hidden=True,  # Ẩn mặc định, hiện khi user nhấn Show Overlay
+        background_color="#000000",
     )
 
-    # Liên kết cửa sổ với bridge
+    # Liên kết windows với bridge
     bridge.set_windows(dashboard=controller_win, overlay=overlay_win)
 
-    # Xử lý đóng ứng dụng sạch sẽ khi đóng bảng điều khiển
+    # Dọn dẹp khi đóng app
     def on_closed():
-        logger.info("Terminating runtime processes")
+        logger.info("Shutting down TFT Studio")
         try:
             overlay_win.destroy()
         except Exception:
@@ -155,7 +182,7 @@ def main() -> None:
 
     controller_win.events.closed += on_closed
 
-    # 4. Khởi động PyWebView với nhân Edge Chromium (WebView2) không cần local HTTP server
+    # Khởi động PyWebView với WebView2
     try:
         webview.start(
             debug=False,
@@ -163,7 +190,7 @@ def main() -> None:
             http_server=False,
         )
     except Exception as e:
-        logger.warning("Fallback to default GUI engine: %s", e)
+        logger.warning("WebView2 not available, falling back: %s", e)
         webview.start(debug=False, http_server=False)
 
 
