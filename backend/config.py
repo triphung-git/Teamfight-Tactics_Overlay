@@ -206,20 +206,6 @@ def load_overlay_config() -> dict[str, Any]:
         "font_family": "League Spartan",
         "player_avatars": {},
         "custom_augments": [],
-        # Transform chuẩn — đồng nhất với TransformState trong React
-        "overlay_transform": {
-            "posX": 0,
-            "posY": 0,
-            "rotX": 0,
-            "rotY": 0,
-            "rotZ": 0,
-            "zoomX": 100,
-            "zoomY": 100,
-            "cropTop": 0,
-            "cropBottom": 0,
-            "cropLeft": 0,
-            "cropRight": 0,
-        },
     }
 
     if OVERLAY_CONFIG_PATH.exists():

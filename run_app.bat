@@ -11,10 +11,23 @@ echo.
 
 set PYTHON_EXE=python
 
-:: Kiem tra neu Web Overlay chua build dist thi tu dong build
+:: 1. Kiem tra va tao file .env neu chua co
+if not exist ".env" (
+    if exist ".env.example" (
+        echo [INFO] Phat hien chua co file .env -> Tu dong tao tu .env.example...
+        copy /y ".env.example" ".env" > nul
+    )
+)
+
+:: 2. Kiem tra neu Web Overlay chua build dist thi tu dong build
 if not exist "Web Overlay\dist\index.html" (
-    echo [1/2] Dang bien dich Web Overlay...
+    echo [1/2] Phat hien Web Overlay chua build. Dang chuan bi...
     cd "Web Overlay"
+    if not exist "node_modules" (
+        echo Dang cai dat dependencies cho Web Overlay (npm install)...
+        call npm.cmd install
+    )
+    echo Dang bien dich giao dien (npm run build)...
     call npm.cmd run build
     cd ..
 )

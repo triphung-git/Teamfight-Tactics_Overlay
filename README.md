@@ -28,7 +28,7 @@
 - **Riot API tích hợp** — Tự động lấy kết quả trận đấu TFT gần nhất qua API chính thức
 - **Render Overlay HTML** — Xuất overlay đồ họa chuẩn 1920×1080 phục vụ OBS Browser Source
 - **Cập nhật Real-time** — OBS tự cập nhật overlay mượt mà (không reload, không nhấp nháy) khi nhấn Render
-- **Control Panel Desktop** — Điều chỉnh Position / Rotation / Zoom / Crop trực tiếp
+- **Control Panel Desktop** — Quản lý Riot Live Tracker, chọn Lõi Nâng Cấp và Render trực tiếp
 - **File Watcher** — Tự động re-render khi bạn lưu `overlay_config.json` hoặc thêm ảnh avatar
 - **Xuất PNG** — Kết xuất ảnh overlay 1920×1080 qua Headless Chrome
 - **Standalone** — Chạy hoàn toàn cục bộ, không cần server ngoài, không cần tài khoản
@@ -45,7 +45,7 @@
 │  ┌──────────────────┐    ┌───────────────────────┐  │
 │  │  Control Panel   │    │   Local HTTP Server   │  │
 │  │  (PyWebView UI)  │◄──►│   FastAPI :8080       │  │
-│  │  - Transform     │    │   WS: /ws             │  │
+│  │  - Riot Tracker  │    │   WS: /ws             │  │
 │  │  - Render button │    │   GET: /overlay       │  │
 │  └──────────────────┘    └───────────────────────┘  │
 │           │                        ▲                │
@@ -159,11 +159,6 @@ run_app.bat        # Windows (cmd)
   "font_family": "League Spartan",
   "player_avatars": {
     "TênNgườiChơi": "assets/avatars/ten.png"
-  },
-  "overlay_transform": {
-    "posX": 0, "posY": 0,
-    "zoomX": 100, "zoomY": 100,
-    "cropTop": 0, "cropBottom": 0, "cropLeft": 0, "cropRight": 0
   }
 }
 ```

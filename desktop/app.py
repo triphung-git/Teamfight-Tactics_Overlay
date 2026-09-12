@@ -137,13 +137,13 @@ def main() -> None:
     else:
         controller_url = f"http://127.0.0.1:{server_port}/app"
 
-    # Cửa sổ 1: Control Panel (520x800)
+    # Cửa sổ 1: Control Panel (480x580)
     controller_win = webview.create_window(
         title="TFT Post-Match Studio — Control Panel",
         url=controller_url,
-        width=520,
-        height=800,
-        min_size=(460, 680),
+        width=480,
+        height=580,
+        min_size=(440, 480),
         resizable=True,
         js_api=bridge,
         background_color="#09090b",

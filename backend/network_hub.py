@@ -158,24 +158,11 @@ def get_app_state():
 
 @app.post("/api/render")
 async def trigger_render(request: Request):
-    """Kích hoạt render overlay từ HTTP request (hỗ trợ OBS tools, script).
-    Chấp nhận body JSON tùy chọn: {"transform": {...}} hoặc gọi không có body.
-    """
+    """Kích hoạt render overlay từ HTTP request (hỗ trợ OBS tools, script)."""
     if not _bridge_ref:
         return {"success": False, "error": "Bridge not ready"}
 
-    payload: Dict[str, Any] = {}
-    try:
-        body = await request.body()
-        if body:
-            payload = await request.json()
-    except Exception:
-        pass
-
-    transform = payload.get("transform") if payload else None
-    if not transform:
-        transform = load_overlay_config().get("overlay_transform", {})
-    res = _bridge_ref.render_overlay(transform)
+    res = _bridge_ref.render_overlay()
 
     notify_sync({
         "type": "OVERLAY_RENDERED",
@@ -227,6 +214,89 @@ def trigger_riot_fetch():
         return _bridge_ref.fetch_live_now()
     return {"success": False, "error": "Cơ chế Fetch chỉ khả dụng khi chạy qua app"}
 
+
+# --------------------------------------------------------------------- #
+# /api/augments — Danh sách lõi nâng cấp tiếng Anh từ DDragon (en_US)
+# --------------------------------------------------------------------- #
+@app.get("/api/augments")
+def get_augments_list():
+    """
+    Trả về danh sách lõi nâng cấp (Augments) tiếng Anh từ DDragon en_US.
+    Response: { "augments": [{ "id": "...", "name": "...", "image": "..." }] }
+    Được sắp xếp theo tên tiếng Anh (A-Z). Lọc trùng lặp theo (name, image).
+    """
+    try:
+        from backend.data_parser import get_ddragon_loader
+        loader = get_ddragon_loader("en_US")
+        seen_names: set[str] = set()
+        result = []
+        for aug_id, aug_name in loader.augments.items():
+            img = loader.augment_images.get(aug_id, "")
+            if not aug_name or not img:
+                continue
+            # Lọc các key trùng lặp (DataDragon lưu cả id lẫn key = id)
+            dedup_key = (aug_name, img)
+            if dedup_key in seen_names:
+                continue
+            seen_names.add(dedup_key)
+            result.append({"id": aug_id, "name": aug_name, "image": img})
+        result.sort(key=lambda x: x["name"].lower())
+        return {"augments": result, "total": len(result)}
+    except Exception as e:
+        logger.error("Failed to load augments list: %s", e)
+        return {"augments": [], "total": 0, "error": str(e)}
+
+
+@app.post("/api/augments")
+async def save_custom_augments(request: Request):
+    """
+    Lưu custom_augments vào overlay_config.json và kích hoạt re-compile overlay.
+    Body JSON: { "custom_augments": ["image1.png", "image2.png", "image3.png"] }
+    Phần tử trống (null / "") sẽ được lưu là null — khi render sẽ dùng dữ liệu thực từ trận đấu.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"success": False, "error": "Invalid JSON body"}, status_code=400)
+
+    raw_augments = body.get("custom_augments", [])
+    if not isinstance(raw_augments, list):
+        return JSONResponse({"success": False, "error": "custom_augments must be a list"}, status_code=400)
+
+    # Chuẩn hóa: giữ tối đa 3, phần tử empty string -> None
+    normalized: list = []
+    for item in raw_augments[:3]:
+        if isinstance(item, str) and item.strip():
+            normalized.append(item.strip())
+        else:
+            normalized.append(None)
+
+    # Lưu vào overlay_config.json
+    current_cfg = load_overlay_config()
+
+    # Nếu tất cả đều None → xóa custom_augments để dùng auto từ trận đấu
+    if all(v is None for v in normalized):
+        current_cfg.pop("custom_augments", None)
+    else:
+        current_cfg["custom_augments"] = normalized
+
+    updated = save_overlay_config(current_cfg)
+
+    # Kích hoạt re-compile overlay HTML và thông báo WS ngay lập tức
+    if _bridge_ref:
+        _bridge_ref.notify_frontend("onAppStateUpdate", {"overlay_config": updated})
+        import threading
+        def _recompile():
+            try:
+                _bridge_ref._compile_and_notify(source="AugmentsUpdate")
+            except Exception as exc:
+                logger.warning("Augments re-compile error: %s", exc)
+        threading.Thread(target=_recompile, daemon=True).start()
+    else:
+        # Standalone web mode (không có bridge) — chỉ broadcast config đã đổi
+        notify_sync({"type": "CONFIG_CHANGED", "overlay_config": updated})
+
+    return {"success": True, "overlay_config": updated}
 
 
 # --------------------------------------------------------------------- #

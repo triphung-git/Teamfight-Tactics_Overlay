@@ -230,20 +230,38 @@ def resolve_custom_augment(item: Any, config: dict) -> dict:
 
 
 def build_augments_html(augments_detailed: list[dict], config: Optional[dict] = None) -> str:
-    """Tạo HTML cho 3 lõi nâng cấp với Fallback Image Guard bảo vệ chống vỡ ảnh."""
+    """Tạo HTML cho 3 lõi nâng cấp với hỗ trợ slot None (Auto từ trận đấu).
+
+    Logic ưu tiên theo từng slot:
+    - custom_augments = None/không có → dùng augments_detailed từ trận đấu cho cả 3 slot.
+    - custom_augments = [item0, None, item2] → slot 1 dùng auto từ trận đấu, slot 0 & 2 dùng custom.
+    - item có thể là: str (tên file ảnh / tên lõi tiếng Anh) hoặc None.
+    """
     cfg = config or {}
-    custom = cfg.get("custom_augments", [])
+    custom = cfg.get("custom_augments", None)
     aug_set = get_image_set("augment")
 
-    items_to_render = []
+    # Chuẩn bị nguồn dữ liệu auto (từ trận đấu)
+    auto_source = list(augments_detailed[:3]) if augments_detailed else []
+
+    # Xây dựng danh sách 3 slot
+    items_to_render: list[Optional[dict]] = []
     if custom and isinstance(custom, list):
-        for item in custom[:3]:
-            items_to_render.append(resolve_custom_augment(item, cfg))
+        for i, item in enumerate(custom[:3]):
+            if item is None or (isinstance(item, str) and not item.strip()):
+                # Slot này để Auto — lấy từ trận đấu nếu có
+                items_to_render.append(auto_source[i] if i < len(auto_source) else None)
+            else:
+                items_to_render.append(resolve_custom_augment(item, cfg))
     elif augments_detailed:
-        items_to_render = list(augments_detailed[:3])
+        items_to_render = auto_source
+    # else: không có gì → danh sách trống
 
     slots = []
     for aug in items_to_render:
+        if aug is None:
+            slots.append('<div class="augment-slot empty-slot" title="Chưa có lõi"></div>')
+            continue
         img_name = aug.get("image") or ""
         name = aug.get("name") or "Augment"
         if img_name and img_name in aug_set:
@@ -403,26 +421,6 @@ def generate_overlay_html(
     rendered = rendered.replace("{{ TOP1_AUGMENTS_HTML }}", augments_html)
     rendered = rendered.replace("{{ TOP1_UNITS_HTML }}", units_html)
     rendered = rendered.replace("{{ LOBBY_STANDINGS_HTML }}", standings_html)
-
-    # Thay thế Transform & Crop Style
-    tf = config.get("overlay_transform", {})
-    pos_x = tf.get("posX", 0)
-    pos_y = tf.get("posY", 0)
-    rot_x = tf.get("rotX", 0)
-    rot_y = tf.get("rotY", 0)
-    rot_z = tf.get("rotZ", 0)
-    zoom_x = tf.get("zoomX", 100) / 100.0
-    zoom_y = tf.get("zoomY", 100) / 100.0
-    crop_t = tf.get("cropTop", 0)
-    crop_b = tf.get("cropBottom", 0)
-    crop_l = tf.get("cropLeft", 0)
-    crop_r = tf.get("cropRight", 0)
-
-    tf_style = f"transform: translate({pos_x}px, {pos_y}px) rotateX({rot_x}deg) rotateY({rot_y}deg) rotateZ({rot_z}deg) scale({zoom_x}, {zoom_y}); transform-origin: center center;"
-    if crop_t or crop_b or crop_l or crop_r:
-        tf_style += f" clip-path: inset({crop_t}% {crop_r}% {crop_b}% {crop_l}%);"
-
-    rendered = rendered.replace("{{ TRANSFORM_STYLE }}", tf_style)
 
     # 5. Ghi file HTML đầu ra
     output_html_path.parent.mkdir(parents=True, exist_ok=True)

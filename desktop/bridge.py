@@ -35,19 +35,7 @@ OUTPUT_DIR = BASE_DIR / "output"
 ASSETS_DIR = resolve_resource("assets")
 AVATARS_DIR = BASE_DIR / "assets" / "avatars"
 
-DEFAULT_TRANSFORM = {
-    "posX": 0,
-    "posY": 0,
-    "rotX": 0,
-    "rotY": 0,
-    "rotZ": 0,
-    "zoomX": 100,
-    "zoomY": 100,
-    "cropTop": 0,
-    "cropBottom": 0,
-    "cropLeft": 0,
-    "cropRight": 0,
-}
+# (Transform & Crop parameters removed)
 
 
 class StudioBridge:
@@ -104,8 +92,7 @@ class StudioBridge:
         def on_cfg_changed():
             logger.info("overlay_config.json changed → Auto re-rendering")
             cfg = load_overlay_config()
-            tf = cfg.get("overlay_transform", {})
-            self._compile_and_notify(tf, source="FileWatcher_Config")
+            self._compile_and_notify(source="FileWatcher_Config")
             self.notify_frontend("onAppStateUpdate", {"overlay_config": cfg})
 
         def on_env_changed():
@@ -121,8 +108,7 @@ class StudioBridge:
                 def on_matches_fetched(matches):
                     if matches:
                         logger.info("Fetched %d matches after .env edit", len(matches))
-                        tf = load_overlay_config().get("overlay_transform", {})
-                        self._compile_and_notify(tf, source="LiveAPI_EnvUpdate")
+                        self._compile_and_notify(source="LiveAPI_EnvUpdate")
                         self.notify_frontend(
                             "onAppStateUpdate",
                             {
@@ -161,8 +147,7 @@ class StudioBridge:
 
         def on_avatars_changed():
             logger.info("Avatars changed → Refreshing overlay")
-            tf = load_overlay_config().get("overlay_transform", {})
-            self._compile_and_notify(tf, source="FileWatcher_Avatars")
+            self._compile_and_notify(source="FileWatcher_Avatars")
 
         self._config_watcher.on_config_changed = on_cfg_changed
         self._config_watcher.on_env_changed = on_env_changed
@@ -220,7 +205,7 @@ class StudioBridge:
                     logger.warning("Failed to read cache %s: %s", cand.name, e)
         return None
 
-    def _compile_and_notify(self, transform: dict[str, Any], source: str = "Local") -> dict[str, Any]:
+    def _compile_and_notify(self, source: str = "Local") -> dict[str, Any]:
         """
         Biên dịch overlay HTML → thông báo OBS/overlay tabs cập nhật mượt mà (không reload).
         Thay vì broadcast tới các máy khác, chỉ notify local WS để DOM-swap.
@@ -233,7 +218,6 @@ class StudioBridge:
         match_id = match_data.get("match_id", "LIVE_MATCH")
         output_html = OUTPUT_DIR / "overlay.html"
         gen_cfg = load_generator_config(BASE_DIR / "overlay_config.json")
-        gen_cfg["overlay_transform"] = transform
 
         # 1. Sinh file overlay.html
         generate_overlay_html(match_data, gen_cfg, output_html)
@@ -284,7 +268,7 @@ class StudioBridge:
             "png_path": str(output_png.resolve()),
         }
 
-    def render_overlay(self, transform: dict[str, Any]) -> dict[str, Any]:
+    def render_overlay(self, transform: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         """
         Xử lý nút 'Render':
         1. Render ngay từ cache cục bộ (<50ms).
@@ -292,13 +276,8 @@ class StudioBridge:
         """
         logger.info("Rendering overlay (standalone mode)")
 
-        # Lưu transform mới
-        current_cfg = load_overlay_config()
-        current_cfg["overlay_transform"] = transform
-        save_overlay_config(current_cfg)
-
         # Phase 1: Render ngay lập tức
-        res = self._compile_and_notify(transform, source="InstantRender")
+        res = self._compile_and_notify(source="InstantRender")
 
         # Phase 2: Async check Riot API
         cfg = AppConfig.load()
@@ -306,7 +285,7 @@ class StudioBridge:
             def on_api_complete(matches):
                 if matches:
                     logger.info("Riot API returned %d matches → updating overlay", len(matches))
-                    self._compile_and_notify(transform, source="RiotLiveAPI")
+                    self._compile_and_notify(source="RiotLiveAPI")
                     self.notify_frontend(
                         "onAppStateUpdate",
                         {
@@ -362,13 +341,8 @@ class StudioBridge:
     # API bổ trợ
     # ----------------------------------------------------------------- #
     def get_transform(self) -> dict[str, Any]:
-        """Lấy cấu hình transform hiện tại."""
-        cfg = load_overlay_config()
-        saved = cfg.get("overlay_transform", {})
-        merged = dict(DEFAULT_TRANSFORM)
-        if isinstance(saved, dict):
-            merged.update(saved)
-        return merged
+        """Lấy cấu hình transform hiện tại (đã loại bỏ, trả về rỗng)."""
+        return {}
 
     def get_app_state(self) -> dict[str, Any]:
         """Trả về toàn bộ trạng thái ứng dụng."""
@@ -429,13 +403,64 @@ class StudioBridge:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def update_overlay_transform(self, transform_data: dict[str, Any]) -> dict[str, Any]:
-        """Cập nhật transform cho Overlay."""
-        current = load_overlay_config()
-        current["overlay_transform"] = transform_data
-        save_overlay_config(current)
-        self.notify_frontend("onAppStateUpdate", {"overlay_config": current})
+    def update_overlay_transform(self, transform_data: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        """Cập nhật transform cho Overlay (đã loại bỏ)."""
         return {"success": True}
+
+    def get_augments_list(self) -> list[dict[str, Any]]:
+        """Trả về danh sách lõi nâng cấp tiếng Anh (en_US) từ DDragon, sắp xếp A-Z.
+        Mỗi mục: { "id": str, "name": str (tiếng Anh), "image": str (filename.png) }
+        """
+        try:
+            from backend.data_parser import get_ddragon_loader
+            loader = get_ddragon_loader("en_US")
+            seen: set[tuple] = set()
+            result = []
+            for aug_id, aug_name in loader.augments.items():
+                img = loader.augment_images.get(aug_id, "")
+                if not aug_name or not img:
+                    continue
+                dedup_key = (aug_name, img)
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
+                result.append({"id": aug_id, "name": aug_name, "image": img})
+            result.sort(key=lambda x: x["name"].lower())
+            return result
+        except Exception as e:
+            logger.error("get_augments_list failed: %s", e)
+            return []
+
+    def save_custom_augments(self, augments: list) -> dict[str, Any]:
+        """Lưu 3 lõi nâng cấp đã chọn vào overlay_config.json và re-compile overlay.
+        Args:
+            augments: Danh sách tối đa 3 phần tử — mỗi phần tử là tên file ảnh (str)
+                      hoặc None/empty để dùng Auto (lấy từ trận đấu).
+        """
+        try:
+            normalized: list = []
+            for item in (augments or [])[:3]:
+                if isinstance(item, str) and item.strip():
+                    normalized.append(item.strip())
+                else:
+                    normalized.append(None)
+
+            current = load_overlay_config()
+            if all(v is None for v in normalized):
+                # Tất cả trống → xóa custom_augments để dùng Auto từ trận đấu
+                current.pop("custom_augments", None)
+            else:
+                current["custom_augments"] = normalized
+
+            updated = save_overlay_config(current)
+            self.notify_frontend("onAppStateUpdate", {"overlay_config": updated})
+
+            # Re-compile overlay HTML ngay lập tức
+            result = self._compile_and_notify(source="AugmentsUpdate_PyWebView")
+            return {"success": True, "overlay_config": updated, "compile": result}
+        except Exception as e:
+            logger.error("save_custom_augments failed: %s", e)
+            return {"success": False, "error": str(e)}
 
     def fetch_matches(self, count: int = 5) -> list[dict[str, Any]]:
         """Lấy danh sách các trận gần nhất từ Riot API."""
@@ -633,8 +658,7 @@ class StudioBridge:
 
         def on_complete(matches):
             if matches:
-                tf = load_overlay_config().get("overlay_transform", {})
-                self._compile_and_notify(tf, source="ManualLiveFetch")
+                self._compile_and_notify(source="ManualLiveFetch")
                 self.notify_frontend(
                     "onAppStateUpdate",
                     {

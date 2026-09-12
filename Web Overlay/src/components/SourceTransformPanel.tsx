@@ -1,15 +1,10 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   X,
-  RotateCcw,
   Eye,
   EyeOff,
   Play,
   CheckCircle2,
-  Lock,
-  Unlock,
-  Sliders,
-  Crop as CropIcon,
   RefreshCw,
   Sparkles,
   Monitor,
@@ -18,42 +13,23 @@ import {
   User,
   Key,
   AlertTriangle,
+  Search,
+  ChevronDown,
+  Save,
 } from 'lucide-react';
 
-interface TransformState {
-  posX: number;
-  posY: number;
-  rotX: number;
-  rotY: number;
-  rotZ: number;
-  zoomX: number;
-  zoomY: number;
-  cropTop: number;
-  cropBottom: number;
-  cropLeft: number;
-  cropRight: number;
+// ---- Augment types ----
+interface AugmentItem {
+  id: string;
+  name: string;   // English name from DDragon
+  image: string;  // Filename, e.g. "BronzeForLife_II.png"
 }
-
-const DEFAULT_STATE: TransformState = {
-  posX: 0,
-  posY: 0,
-  rotX: 0,
-  rotY: 0,
-  rotZ: 0,
-  zoomX: 100,
-  zoomY: 100,
-  cropTop: 0,
-  cropBottom: 0,
-  cropLeft: 0,
-  cropRight: 0,
-};
 
 declare global {
   interface Window {
     pywebview?: {
       api?: {
-        get_transform?: () => Promise<TransformState>;
-        render_overlay?: (transform: TransformState) => Promise<{
+        render_overlay?: () => Promise<{
           success: boolean;
           match_id?: string;
           mode?: string;
@@ -67,6 +43,8 @@ declare global {
         update_api_key?: (api_key: string) => Promise<any>;
         fetch_live_now?: () => Promise<any>;
         set_auto_polling?: (enabled: boolean, interval?: number) => Promise<boolean>;
+        get_augments_list?: () => Promise<AugmentItem[]>;
+        save_custom_augments?: (augments: (string | null)[]) => Promise<any>;
       };
     };
     // Callbacks từ Python backend
@@ -76,8 +54,6 @@ declare global {
 }
 
 export default function SourceTransformPanel() {
-  const [transform, setTransform] = useState<TransformState>(DEFAULT_STATE);
-  const [lockAspect, setLockAspect] = useState(true);
   const [isVisible, setIsVisible] = useState(false);
   const [isClosed, setIsClosed] = useState(false);
 
@@ -103,24 +79,15 @@ export default function SourceTransformPanel() {
   const [obsConnected, setObsConnected] = useState(false);
   const obsUrl = 'http://localhost:8080/overlay';
 
-  // Numeric scrub drag state
-  const [scrubbingParam, setScrubbingParam] = useState<keyof TransformState | null>(null);
-  const scrubStartRef = useRef<{ x: number; initialVal: number }>({ x: 0, initialVal: 0 });
-  const rafIdRef = useRef<number | null>(null);
+  // Augments Selector State
+  const [augmentsList, setAugmentsList] = useState<AugmentItem[]>([]);
+  // 3 slots: each is the image filename (e.g. "BronzeForLife_II.png") or null = Auto
+  const [selectedAugments, setSelectedAugments] = useState<(string | null)[]>([null, null, null]);
+  const [isSavingAugments, setIsSavingAugments] = useState(false);
+  const [augmentsLoaded, setAugmentsLoaded] = useState(false);
 
-  // Nạp transform & riot config khi mở app
+  // Nạp riot config & augments khi mở app
   useEffect(() => {
-    const initTransform = async () => {
-      if (window.pywebview?.api?.get_transform) {
-        try {
-          const saved = await window.pywebview.api.get_transform();
-          if (saved) setTransform(saved);
-        } catch (e) {
-          console.warn('Could not load transform from backend:', e);
-        }
-      }
-    };
-
     const initRiotConfig = async () => {
       try {
         let riotData: any = null;
@@ -140,21 +107,61 @@ export default function SourceTransformPanel() {
       }
     };
 
+    // Load danh sách augments + config hiện tại
+    const initAugments = async () => {
+      try {
+        // Load danh sách tất cả augments
+        let list: AugmentItem[] = [];
+        if (window.pywebview?.api?.get_augments_list) {
+          list = await window.pywebview.api.get_augments_list();
+        } else {
+          const res = await fetch('/api/augments').then(r => r.json()).catch(() => null);
+          list = res?.augments || [];
+        }
+        setAugmentsList(list);
+        setAugmentsLoaded(true);
+
+        // Load custom_augments hiện tại từ config
+        const cfgRes = await fetch('/api/config').then(r => r.json()).catch(() => null);
+        if (cfgRes?.custom_augments && Array.isArray(cfgRes.custom_augments)) {
+          const slots = [0, 1, 2].map(i => {
+            const v = cfgRes.custom_augments[i];
+            return (typeof v === 'string' && v.trim()) ? v.trim() : null;
+          });
+          setSelectedAugments(slots);
+        }
+      } catch (e) {
+        console.warn('Could not load augments:', e);
+        setAugmentsLoaded(true);
+      }
+    };
+
     if (window.pywebview) {
-      initTransform();
       initRiotConfig();
+      initAugments();
     } else {
       window.addEventListener('pywebviewready', () => {
-        initTransform();
         initRiotConfig();
+        initAugments();
       });
       initRiotConfig();
+      initAugments();
     }
 
     // Callback nhận thông báo từ Python Backend
     window.onAppStateUpdate = (data: any) => {
-      if (data?.overlay_config?.overlay_transform) {
-        setTransform(data.overlay_config.overlay_transform);
+      if (data?.overlay_config?.custom_augments !== undefined) {
+        const ca = data.overlay_config.custom_augments;
+        if (Array.isArray(ca)) {
+          const slots = [0, 1, 2].map(i => {
+            const v = ca[i];
+            return (typeof v === 'string' && v.trim()) ? v.trim() : null;
+          });
+          setSelectedAugments(slots);
+        } else {
+          // config không có custom_augments → tất cả Auto
+          setSelectedAugments([null, null, null]);
+        }
       }
       if (data?.config) {
         if (data.config.riot_id) setRiotId(data.config.riot_id);
@@ -203,11 +210,7 @@ export default function SourceTransformPanel() {
         socket.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data);
-            if (msg.type === 'INITIAL_STATE') {
-              if (msg.overlay_config?.overlay_transform) {
-                setTransform(msg.overlay_config.overlay_transform);
-              }
-            } else if (msg.type === 'OVERLAY_RENDERED') {
+            if (msg.type === 'OVERLAY_RENDERED') {
               const src = msg.source ? ` (${msg.source})` : '';
               setToastMessage(`Overlay cập nhật: ${msg.match_id || 'OK'}${src}`);
               setToastDuration('instant');
@@ -239,104 +242,8 @@ export default function SourceTransformPanel() {
     return () => {
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (socket) socket.close();
-      window.removeEventListener('pywebviewready', initTransform);
     };
   }, []);
-
-  const updateParam = (key: keyof TransformState, value: number) => {
-    setTransform(prev => {
-      const next = { ...prev, [key]: value };
-      if (lockAspect && key === 'zoomX') {
-        next.zoomY = value;
-      } else if (lockAspect && key === 'zoomY') {
-        next.zoomX = value;
-      }
-      return next;
-    });
-  };
-
-  const handleResetTransform = () => {
-    setTransform(prev => ({
-      ...prev,
-      posX: 0,
-      posY: 0,
-      rotX: 0,
-      rotY: 0,
-      rotZ: 0,
-      zoomX: 100,
-      zoomY: 100,
-    }));
-  };
-
-  const handleResetCrop = () => {
-    setTransform(prev => ({
-      ...prev,
-      cropTop: 0,
-      cropBottom: 0,
-      cropLeft: 0,
-      cropRight: 0,
-    }));
-  };
-
-  const handleResetAll = () => {
-    setTransform(DEFAULT_STATE);
-  };
-
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!scrubbingParam || !scrubStartRef.current) return;
-
-      if (rafIdRef.current !== null) return;
-
-      const currentX = e.clientX;
-      rafIdRef.current = requestAnimationFrame(() => {
-        rafIdRef.current = null;
-        if (!scrubbingParam || !scrubStartRef.current) return;
-
-        const deltaX = currentX - scrubStartRef.current.x;
-        let step = 1;
-        if (e.shiftKey) step = 5;
-        if (e.altKey) step = 0.1;
-
-        const raw = scrubStartRef.current.initialVal + Math.round(deltaX * 0.5) * step;
-        let clamped = raw;
-
-        if (scrubbingParam.startsWith('crop')) {
-          clamped = Math.min(80, Math.max(0, Math.round(raw)));
-        } else if (scrubbingParam.startsWith('zoom')) {
-          clamped = Math.min(300, Math.max(10, Math.round(raw)));
-        } else if (scrubbingParam.startsWith('rot')) {
-          clamped = Math.min(180, Math.max(-180, Math.round(raw)));
-        } else if (scrubbingParam.startsWith('pos')) {
-          clamped = Math.min(200, Math.max(-200, Math.round(raw)));
-        }
-
-        updateParam(scrubbingParam, clamped);
-      });
-    };
-
-    const handleMouseUp = () => {
-      if (rafIdRef.current !== null) {
-        cancelAnimationFrame(rafIdRef.current);
-        rafIdRef.current = null;
-      }
-      setScrubbingParam(null);
-    };
-
-    if (scrubbingParam) {
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
-    }
-
-    return () => {
-      if (rafIdRef.current !== null) {
-        cancelAnimationFrame(rafIdRef.current);
-        rafIdRef.current = null;
-      }
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [scrubbingParam, lockAspect]);
 
   // Cập nhật Riot ID & Kích hoạt Fetch trận mới
   const handleUpdateRiotId = async (e?: React.FormEvent) => {
@@ -412,6 +319,45 @@ export default function SourceTransformPanel() {
     }
   };
 
+  // Lưu Augments và re-render overlay
+  const handleSaveAugments = async () => {
+    if (isSavingAugments) return;
+    setIsSavingAugments(true);
+    try {
+      // selectedAugments: (string | null)[] — null = Auto
+      if (window.pywebview?.api?.save_custom_augments) {
+        const res = await window.pywebview.api.save_custom_augments(selectedAugments);
+        if (res?.success) {
+          setToastMessage('✓ Augments saved & overlay re-rendered!');
+          setShowSuccessToast(true);
+          setTimeout(() => setShowSuccessToast(false), 4000);
+        } else {
+          throw new Error(res?.error || 'Unknown error');
+        }
+      } else {
+        // Web mode: REST API
+        const res = await fetch('/api/augments', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ custom_augments: selectedAugments }),
+        }).then(r => r.json());
+        if (res?.success) {
+          setToastMessage('✓ Augments saved & overlay re-rendered!');
+          setShowSuccessToast(true);
+          setTimeout(() => setShowSuccessToast(false), 4000);
+        } else {
+          throw new Error(res?.error || 'Failed to save augments');
+        }
+      }
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Failed to save augments');
+      setShowErrorToast(true);
+      setTimeout(() => setShowErrorToast(false), 5000);
+    } finally {
+      setIsSavingAugments(false);
+    }
+  };
+
   // Thực thi Render Overlay
   const handleTriggerRender = async () => {
     if (isRendering) return;
@@ -426,7 +372,7 @@ export default function SourceTransformPanel() {
       if (window.pywebview?.api?.render_overlay) {
         // Chế độ Desktop: gọi trực tiếp Python API
         setRenderProgress(45);
-        const res = await window.pywebview.api.render_overlay(transform);
+        const res = await window.pywebview.api.render_overlay();
         const elapsedSec = ((performance.now() - startTime) / 1000).toFixed(2);
 
         setRenderProgress(100);
@@ -447,8 +393,6 @@ export default function SourceTransformPanel() {
         setRenderProgress(40);
         const res = await fetch('/api/render', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ transform }),
         }).then(r => r.json());
 
         const elapsedSec = ((performance.now() - startTime) / 1000).toFixed(2);
@@ -495,20 +439,11 @@ export default function SourceTransformPanel() {
     }
   };
 
-  const startScrub = (key: keyof TransformState, e: React.MouseEvent) => {
-    e.preventDefault();
-    setScrubbingParam(key);
-    scrubStartRef.current = {
-      x: e.clientX,
-      initialVal: transform[key],
-    };
-  };
-
   if (isClosed) {
     return (
       <div className="flex flex-col items-center justify-center p-8 bg-zinc-950 rounded-xl border border-zinc-800 shadow-2xl">
         <div className="text-zinc-400 text-sm mb-3 font-medium flex items-center gap-2">
-          <Sliders className="w-4 h-4 text-zinc-500" />
+          <Activity className="w-4 h-4 text-blue-400" />
           <span>TFT Post-Match Studio — Closed</span>
         </div>
         <button
@@ -523,26 +458,21 @@ export default function SourceTransformPanel() {
   }
 
   return (
-    <div className={`w-[460px] max-w-full bg-zinc-900/95 text-zinc-200 rounded-xl border border-zinc-800 shadow-2xl overflow-hidden backdrop-blur-md select-none font-sans transition-all ${!isVisible ? 'opacity-60' : 'opacity-100'}`}>
-
-      {/* 1. Header */}
-      <div className="px-3.5 py-2.5 bg-zinc-950/80 border-b border-zinc-800/80 flex flex-col gap-1">
+    <div className={`w-[460px] max-w-full bg-zinc-900/95 text-zinc-200 rounded-xl border border-zinc-800 shadow-2xl backdrop-blur-md select-none font-sans transition-all flex flex-col
+      ${!isVisible ? 'opacity-90' : 'opacity-100'}`}
+      style={{ maxHeight: '100dvh' }}
+    >
+      {/* 1. Header — cố định, không co rút */}
+      <div className="px-3.5 py-2.5 bg-zinc-950/80 border-b border-zinc-800/80 flex flex-col gap-1 shrink-0">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className={`w-2 h-2 rounded-full ${isVisible ? 'bg-blue-500 animate-pulse' : 'bg-amber-500'}`} />
+            <div className={`w-2 h-2 rounded-full ${isVisible ? 'bg-blue-500 animate-pulse' : 'bg-emerald-500'}`} />
             <h1 className="text-xs font-bold text-zinc-100 uppercase tracking-wider leading-none">
               TFT POST-MATCH STUDIO
             </h1>
           </div>
 
           <div className="flex items-center gap-1">
-            <button
-              onClick={handleResetAll}
-              title="Reset All Parameters"
-              className="p-1 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/80 rounded transition-colors"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-            </button>
             <button
               onClick={handleClose}
               title="Close Panel"
@@ -577,7 +507,13 @@ export default function SourceTransformPanel() {
         </div>
       </div>
 
-      <div className="p-3 space-y-3">
+      {/* Scrollable body — co dãn theo chiều cao cửa sổ */}
+      <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 space-y-3"
+        style={{
+          scrollbarWidth: 'thin',
+          scrollbarColor: '#3f3f46 transparent',
+        }}
+      >
         {/* Riot Live In-Game Tracker Section */}
         <div className="bg-zinc-950/70 border border-zinc-800/80 rounded-lg p-2.5 flex flex-col gap-2 shadow-inner">
           <div className="flex items-center justify-between">
@@ -704,6 +640,57 @@ export default function SourceTransformPanel() {
           )}
         </div>
 
+        {/* Augments Selection Card */}
+        <div className="bg-zinc-950/70 border border-zinc-800/80 rounded-lg p-2.5 flex flex-col gap-2 shadow-inner">
+          <div className="flex items-center justify-between border-b border-zinc-800/60 pb-1.5">
+            <span className="text-[11px] font-semibold text-zinc-200 tracking-wide flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+              Augments Selection
+            </span>
+            <button
+              onClick={handleSaveAugments}
+              disabled={isSavingAugments || !augmentsLoaded}
+              className={`px-2.5 py-0.5 rounded text-[10px] font-semibold flex items-center gap-1 border transition-all ${
+                isSavingAugments
+                  ? 'bg-amber-950/60 border-amber-600/60 text-amber-300 cursor-wait'
+                  : 'bg-amber-600/90 hover:bg-amber-500 border-amber-500 text-white shadow-sm'
+              }`}
+            >
+              <Save className="w-3 h-3" />
+              <span>{isSavingAugments ? 'Saving...' : 'Save & Sync'}</span>
+            </button>
+          </div>
+
+          {/* 3 Augment Slot Pickers */}
+          {!augmentsLoaded ? (
+            <div className="flex items-center justify-center py-3 text-zinc-500 text-[11px] font-mono">
+              <RefreshCw className="w-3 h-3 animate-spin mr-1.5" /> Loading augments...
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {[0, 1, 2].map(slotIdx => (
+                <AugmentSlotPicker
+                  key={slotIdx}
+                  slotIndex={slotIdx}
+                  augmentsList={augmentsList}
+                  value={selectedAugments[slotIdx]}
+                  onChange={img => {
+                    setSelectedAugments(prev => {
+                      const next = [...prev];
+                      next[slotIdx] = img;
+                      return next;
+                    });
+                  }}
+                />
+              ))}
+            </div>
+          )}
+
+          <div className="text-[9px] font-mono text-zinc-600 pt-0.5 border-t border-zinc-800/40">
+            Slot “Auto” uses live match augments. Save to sync overlay instantly.
+          </div>
+        </div>
+
         {/* Hidden Indicator */}
         {!isVisible && (
           <div className="bg-amber-950/40 border border-amber-800/50 text-amber-300 text-[11px] px-3 py-1.5 rounded-md flex items-center justify-between font-mono">
@@ -713,174 +700,6 @@ export default function SourceTransformPanel() {
             </div>
           </div>
         )}
-
-        {/* 2. Transform Controls */}
-        <div className="bg-zinc-950/50 rounded-lg p-2.5 border border-zinc-800/80 space-y-2">
-          <div className="flex items-center justify-between border-b border-zinc-800/60 pb-1.5">
-            <span className="text-[11px] font-semibold text-zinc-200 tracking-wide flex items-center gap-1.5">
-              <Sliders className="w-3 h-3 text-blue-400" />
-              Transform
-            </span>
-            <button
-              onClick={handleResetTransform}
-              className="text-[10px] text-zinc-500 hover:text-zinc-300 font-mono transition-colors"
-            >
-              Reset Transform
-            </button>
-          </div>
-
-          {/* Position Section */}
-          <div className="space-y-1.5">
-            <div className="text-[10px] font-mono text-zinc-400 uppercase tracking-wider">Position</div>
-            <div className="grid grid-cols-2 gap-2">
-              <ControlRow
-                label="Pos X"
-                value={transform.posX}
-                min={-200}
-                max={200}
-                unit="px"
-                onChange={v => updateParam('posX', v)}
-                onScrubStart={e => startScrub('posX', e)}
-              />
-              <ControlRow
-                label="Pos Y"
-                value={transform.posY}
-                min={-200}
-                max={200}
-                unit="px"
-                onChange={v => updateParam('posY', v)}
-                onScrubStart={e => startScrub('posY', e)}
-              />
-            </div>
-          </div>
-
-          {/* Rotation Section */}
-          <div className="space-y-1.5 pt-1">
-            <div className="text-[10px] font-mono text-zinc-400 uppercase tracking-wider">Rotation</div>
-            <div className="grid grid-cols-3 gap-1.5">
-              <ControlRow
-                label="Rot X"
-                value={transform.rotX}
-                min={-180}
-                max={180}
-                unit="°"
-                onChange={v => updateParam('rotX', v)}
-                onScrubStart={e => startScrub('rotX', e)}
-              />
-              <ControlRow
-                label="Rot Y"
-                value={transform.rotY}
-                min={-180}
-                max={180}
-                unit="°"
-                onChange={v => updateParam('rotY', v)}
-                onScrubStart={e => startScrub('rotY', e)}
-              />
-              <ControlRow
-                label="Rot Z"
-                value={transform.rotZ}
-                min={-180}
-                max={180}
-                unit="°"
-                onChange={v => updateParam('rotZ', v)}
-                onScrubStart={e => startScrub('rotZ', e)}
-              />
-            </div>
-          </div>
-
-          {/* Zoom Section */}
-          <div className="space-y-1.5 pt-1">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] font-mono text-zinc-400 uppercase tracking-wider">Zoom</span>
-              <button
-                onClick={() => setLockAspect(!lockAspect)}
-                title={lockAspect ? 'Unlock Aspect Ratio' : 'Lock Aspect Ratio'}
-                className={`p-0.5 rounded text-[10px] transition-colors flex items-center gap-1 font-mono ${
-                  lockAspect ? 'text-blue-400 bg-blue-950/40 border border-blue-800/50' : 'text-zinc-500 hover:text-zinc-300'
-                }`}
-              >
-                {lockAspect ? <Lock className="w-2.5 h-2.5" /> : <Unlock className="w-2.5 h-2.5" />}
-                <span>{lockAspect ? 'Locked' : 'Independent'}</span>
-              </button>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <ControlRow
-                label="Zoom X"
-                value={transform.zoomX}
-                min={10}
-                max={300}
-                unit="%"
-                onChange={v => updateParam('zoomX', v)}
-                onScrubStart={e => startScrub('zoomX', e)}
-              />
-              <ControlRow
-                label="Zoom Y"
-                value={transform.zoomY}
-                min={10}
-                max={300}
-                unit="%"
-                onChange={v => updateParam('zoomY', v)}
-                onScrubStart={e => startScrub('zoomY', e)}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* 3. Crop Controls */}
-        <div className="bg-zinc-950/50 rounded-lg p-2.5 border border-zinc-800/80 space-y-2">
-          <div className="flex items-center justify-between border-b border-zinc-800/60 pb-1.5">
-            <span className="text-[11px] font-semibold text-zinc-200 tracking-wide flex items-center gap-1.5">
-              <CropIcon className="w-3 h-3 text-cyan-400" />
-              Crop
-            </span>
-            <button
-              onClick={handleResetCrop}
-              className="text-[10px] text-zinc-400 hover:text-cyan-300 font-mono transition-colors flex items-center gap-1 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800"
-            >
-              <RotateCcw className="w-2.5 h-2.5" />
-              Reset Crop
-            </button>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <ControlRow
-              label="Top"
-              value={transform.cropTop}
-              min={0}
-              max={80}
-              unit="%"
-              onChange={v => updateParam('cropTop', v)}
-              onScrubStart={e => startScrub('cropTop', e)}
-            />
-            <ControlRow
-              label="Bottom"
-              value={transform.cropBottom}
-              min={0}
-              max={80}
-              unit="%"
-              onChange={v => updateParam('cropBottom', v)}
-              onScrubStart={e => startScrub('cropBottom', e)}
-            />
-            <ControlRow
-              label="Left"
-              value={transform.cropLeft}
-              min={0}
-              max={80}
-              unit="%"
-              onChange={v => updateParam('cropLeft', v)}
-              onScrubStart={e => startScrub('cropLeft', e)}
-            />
-            <ControlRow
-              label="Right"
-              value={transform.cropRight}
-              min={0}
-              max={80}
-              unit="%"
-              onChange={v => updateParam('cropRight', v)}
-              onScrubStart={e => startScrub('cropRight', e)}
-            />
-          </div>
-        </div>
 
         {/* Toast Notification */}
         {showSuccessToast && (
@@ -893,7 +712,7 @@ export default function SourceTransformPanel() {
           </div>
         )}
 
-        {/* 4. Main Action Controls */}
+        {/* Main Action Controls */}
         <div className="pt-1">
           <div className="grid grid-cols-3 gap-2">
             {/* Render Button */}
@@ -974,50 +793,196 @@ export default function SourceTransformPanel() {
   );
 }
 
-// Compact Horizontal Control Row Component
-interface ControlRowProps {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  unit: string;
-  onChange: (val: number) => void;
-  onScrubStart: (e: React.MouseEvent) => void;
+// ============================================================
+// AugmentSlotPicker — Searchable combobox cho 1 slot lõi
+// ============================================================
+interface AugmentSlotPickerProps {
+  slotIndex: number;
+  augmentsList: AugmentItem[];
+  value: string | null;          // image filename or null = Auto
+  onChange: (img: string | null) => void;
 }
 
-function ControlRow({
-  label,
-  value,
-  min,
-  max,
-  unit,
-  onChange,
-  onScrubStart,
-}: ControlRowProps) {
+function AugmentSlotPicker({ slotIndex, augmentsList, value, onChange }: AugmentSlotPickerProps) {
+  const [query, setQuery] = useState('');
+  const [isOpen, setIsOpen] = useState(false);
+  // Vị trí dropdown (fixed so that it escapes overflow-y-auto containers)
+  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
+  const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Tìm thông tin augment hiện tại
+  const currentAug = value ? augmentsList.find(a => a.image === value) : null;
+
+  // Filter logic: nếu có query thì tìm prefix/includes, nếu không thì hiện toàn bộ
+  const filtered = useMemo((): AugmentItem[] => {
+    const q = query.trim().toLowerCase();
+    if (!q) return augmentsList;
+    // Ưu tiên: bắt đầu bằng query
+    const starts = augmentsList.filter(a => a.name.toLowerCase().startsWith(q));
+    // Phụ: chứa query (nhưng không bắt đầu)
+    const includes = augmentsList.filter(a =>
+      !a.name.toLowerCase().startsWith(q) && a.name.toLowerCase().includes(q)
+    );
+    return [...starts, ...includes];
+  }, [augmentsList, query]);
+
+  // Đóng khi click ngoài
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    if (isOpen) document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isOpen]);
+
+  const handleOpen = () => {
+    if (!triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const dropdownHeight = 260;
+    // Mở lên nếu không đủ chỗ bên dưới
+    const openUpward = spaceBelow < dropdownHeight + 8 && rect.top > dropdownHeight;
+    setDropdownStyle({
+      position: 'fixed',
+      left: rect.left,
+      width: rect.width,
+      zIndex: 9999,
+      ...(openUpward
+        ? { bottom: window.innerHeight - rect.top + 4 }
+        : { top: rect.bottom + 4 }),
+    });
+    setIsOpen(true);
+    setQuery('');
+    setTimeout(() => inputRef.current?.focus(), 50);
+  };
+
+  const handleSelect = (aug: AugmentItem | null) => {
+    onChange(aug?.image ?? null);
+    setIsOpen(false);
+    setQuery('');
+  };
+
+  const slotLabel = ['Augment I', 'Augment II', 'Augment III'][slotIndex] ?? `Slot ${slotIndex + 1}`;
+  const IMG_BASE = '/TFT_DDragon/img/augment/';
+
   return (
-    <div className="flex items-center gap-1.5 bg-zinc-900/80 px-2 py-1 rounded border border-zinc-800/80 hover:border-zinc-700/80 transition-colors">
-      <span
-        onMouseDown={onScrubStart}
-        title="Click & drag left/right to scrub value"
-        className="text-[10px] font-mono text-zinc-400 shrink-0 cursor-ew-resize hover:text-blue-400 transition-colors select-none"
+    <div ref={containerRef} className="relative flex flex-col gap-1">
+      {/* Label */}
+      <span className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest">{slotLabel}</span>
+
+      {/* Trigger button */}
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={handleOpen}
+        className={`w-full flex items-center gap-2 px-2 py-1.5 rounded border text-left transition-all ${ 
+          isOpen
+            ? 'border-amber-500/70 bg-zinc-900 ring-1 ring-amber-500/30'
+            : 'border-zinc-700/80 bg-zinc-900/70 hover:border-zinc-600'
+        }`}
       >
-        {label}
-      </span>
+        {/* Augment icon preview */}
+        {currentAug ? (
+          <img
+            src={`${IMG_BASE}${currentAug.image}`}
+            alt={currentAug.name}
+            className="w-5 h-5 rounded object-cover shrink-0"
+            onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+          />
+        ) : (
+          <div className="w-5 h-5 rounded bg-zinc-800 border border-zinc-700 flex items-center justify-center shrink-0">
+            <Sparkles className="w-2.5 h-2.5 text-zinc-600" />
+          </div>
+        )}
 
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={unit === '°' ? 1 : 1}
-        value={value}
-        onChange={e => onChange(parseFloat(e.target.value) || 0)}
-        className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-blue-500 focus:outline-none"
-      />
+        {/* Name display */}
+        <span className={`text-[11px] flex-1 truncate ${ currentAug ? 'text-zinc-200 font-medium' : 'text-zinc-500 italic' }`}>
+          {currentAug ? currentAug.name : 'Auto (from match)'}
+        </span>
 
-      <span className="text-[10px] font-mono text-zinc-300 w-9 text-right shrink-0">
-        {Math.round(value)}
-        {unit}
-      </span>
+        <ChevronDown className={`w-3 h-3 text-zinc-500 shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+
+      {/* Dropdown panel — fixed-positioned để thoát overflow ancestor */}
+      {isOpen && (
+        <div
+          className="bg-zinc-950 border border-amber-600/40 rounded-lg shadow-2xl shadow-black/60 flex flex-col overflow-hidden"
+          style={{ ...dropdownStyle, maxHeight: '260px' }}
+        >
+          {/* Search input */}
+          <div className="flex items-center gap-1.5 px-2.5 py-2 border-b border-zinc-800">
+            <Search className="w-3 h-3 text-zinc-400 shrink-0" />
+            <input
+              ref={inputRef}
+              type="text"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Search augments..."
+              className="flex-1 bg-transparent text-[11px] text-zinc-200 placeholder-zinc-600 outline-none"
+            />
+            {query && (
+              <button onClick={() => setQuery('')} className="text-zinc-600 hover:text-zinc-400">
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+
+          {/* Scrollable list */}
+          <div className="overflow-y-auto flex-1" style={{ maxHeight: '196px' }}>
+            {/* Auto option */}
+            <button
+              type="button"
+              onClick={() => handleSelect(null)}
+              className={`w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-zinc-800/70 transition-colors text-left border-b border-zinc-800/50 ${
+                value === null ? 'bg-amber-950/40' : ''
+              }`}
+            >
+              <div className="w-5 h-5 rounded bg-zinc-800 border border-zinc-700 flex items-center justify-center shrink-0">
+                <Sparkles className="w-2.5 h-2.5 text-amber-500" />
+              </div>
+              <div className="flex flex-col min-w-0">
+                <span className="text-[11px] text-amber-300 font-semibold">Auto</span>
+                <span className="text-[9px] text-zinc-600 font-mono">Use live match data</span>
+              </div>
+              {value === null && <CheckCircle2 className="w-3 h-3 text-amber-400 ml-auto shrink-0" />}
+            </button>
+
+            {/* Augment items */}
+            {filtered.length === 0 ? (
+              <div className="py-6 text-center text-[11px] text-zinc-600 font-mono">No augments found</div>
+            ) : (
+              filtered.map(aug => (
+                <button
+                  key={aug.id}
+                  type="button"
+                  onClick={() => handleSelect(aug)}
+                  className={`w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-zinc-800/70 transition-colors text-left ${
+                    value === aug.image ? 'bg-amber-950/30' : ''
+                  }`}
+                >
+                  <img
+                    src={`${IMG_BASE}${aug.image}`}
+                    alt={aug.name}
+                    className="w-5 h-5 rounded object-cover shrink-0"
+                    onError={e => {
+                      const el = e.target as HTMLImageElement;
+                      el.style.display = 'none';
+                    }}
+                  />
+                  <span className={`text-[11px] truncate ${ value === aug.image ? 'text-amber-200 font-semibold' : 'text-zinc-300' }`}>
+                    {aug.name}
+                  </span>
+                  {value === aug.image && <CheckCircle2 className="w-3 h-3 text-amber-400 ml-auto shrink-0" />}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
